@@ -1,7 +1,47 @@
 # ExitGuard — Tailscale exit node 트래픽 감시/보고/차단
 
-이 머신을 다른 기기들의 Tailscale exit node 로 쓰면서, 통과하는 모든 트래픽을
-감시해 의심 정황을 보고하고 자동으로 차단/격리한다.
+[![test](https://github.com/misolove/exitguard/actions/workflows/test.yml/badge.svg)](https://github.com/misolove/exitguard/actions/workflows/test.yml)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)
+![deps](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
+
+**집 서버 한 대를 가족 기기들의 인터넷 출구(Tailscale exit node)로 쓰면서, 그 출구를 지나는 모든 트래픽을
+감시하고, 의심 정황을 알리고, 필요하면 자동으로 차단·격리한다.**
+
+![실제 운영 중인 exitguard-top 화면 (기기 이름·IP·접속 도메인은 가림)](docs/tui-live-masked.png)
+
+<sub>실제 집 서버에서 돌고 있는 `exitguard-top` 화면. 기기 이름·IP·접속 도메인은 가렸다.</sub>
+
+## 한눈에
+
+| | |
+|---|---|
+| **무엇을** | 가족 기기(폰·노트북·태블릿)가 어디와 통신하는지 한 곳에서 본다 |
+| **어떻게** | 트래픽을 Tailscale로 집 서버에 모으고 → Suricata IDS로 검사 → 위험하면 nftables로 차단 |
+| **보는 법** | SSH 터미널 대시보드 `exitguard-top`, 또는 폰 브라우저용 읽기 전용 웹 대시보드 `--web` |
+| **상태** | 2026-10 부터 실제 운영 중. 이 레포는 민감정보를 뺀 공개본 |
+
+```mermaid
+flowchart LR
+  D["가족 기기<br/>폰 · 노트북 · 태블릿"] -->|WireGuard| S["집 서버<br/>Tailscale exit node"]
+  S -->|NAT| I["인터넷"]
+  S -.패킷 사본.-> IDS["Suricata IDS"]
+  IDS -->|eve.json| W["exitguard-watch<br/>알림 · 탐지"]
+  W -->|위험 목적지 / 기기| N["nftables<br/>차단 · 격리"]
+  W --> T["exitguard-top<br/>터미널 · 웹 대시보드"]
+```
+
+## 30초 체험 (설치 없이)
+
+Python 3 만 있으면 된다. 가짜 트래픽으로 돌아가며 아무것도 차단하지 않는다.
+
+```bash
+git clone https://github.com/misolove/exitguard && cd exitguard
+python3 exitguard/dash.py --demo          # 터미널 대시보드 (q 종료)
+python3 exitguard/dash.py --demo --web    # 웹 대시보드 → http://127.0.0.1:8080
+```
+
+<img src="docs/web-demo-phone.png" alt="폰 폭에서 본 웹 대시보드 데모 화면" width="280">
 
 ## 구성
 
