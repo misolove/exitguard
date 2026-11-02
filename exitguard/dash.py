@@ -2,7 +2,9 @@
 """ExitGuard 터미널 대시보드 (curses). 원격 SSH 에서 한 화면으로 상태 파악.
 사용: exitguard-top            (일반 사용자: 조회만 / root: 차단·격리 조치 가능)
       exitguard-top --text     (curses 없이 스냅샷 한 번 출력)
-      exitguard-top --demo     (가짜 데이터로 화면 시연. --text 와 함께 쓸 수 있음)
+      exitguard-top --demo     (가짜 데이터로 화면 시연. --text / --web 와 함께 쓸 수 있음)
+      exitguard-top --web [--host 127.0.0.1] [--port 8080]
+                               (브라우저용 읽기 전용 대시보드. 조치 기능 없음)
 """
 import collections, curses, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
@@ -663,8 +665,245 @@ def text_snapshot(m):
         print(f"  {datetime.fromtimestamp(ts):%H:%M:%S} {m.name(c):<16} {label}")
 
 
+# ---------------------------------------------------------------- web (읽기 전용)
+# 같은 Model 을 브라우저로 보여준다. 조치(차단·격리·pcap) 경로는 일부러 두지 않는다: GET 두 개만 처리.
+
+def snapshot(m):
+    """Model 상태를 JSON 직렬화 가능한 dict 로. 웹 대시보드 /api/snapshot 응답."""
+    now = time.time(); day = now - 86400
+    cap = m.stats.get("capture", {}); pk = cap.get("kernel_packets", 0); dr = cap.get("kernel_drops", 0)
+    cnt = collections.Counter()
+    for a in m.alerts:
+        try:
+            if datetime.fromisoformat(a["ts"]).timestamp() > day:
+                cnt[a.get("level")] += 1
+        except Exception:
+            pass
+    return {
+        "generated": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+        "demo": DEMO,
+        "host": m.ts_self.get("HostName") or os.uname().nodename,
+        "exit_node_approved": bool(m.ts_self.get("ExitNodeOption")),
+        "services": dict(m.services),
+        "capture": {"packets": pk, "drops": dr, "drop_pct": round(dr / pk * 100, 2) if pk else 0,
+                    "uptime_s": m.stats.get("uptime", 0)},
+        "alerts_24h": {lv: cnt[lv] for lv in ("CRITICAL", "HIGH", "MEDIUM", "LOW")},
+        "nft_visible": IS_ROOT or DEMO,
+        "blocked": len(m.nft["blocked"]), "quarantined": len(m.nft["quar"]),
+        "clients": [{"name": r["name"], "ip": r["ip"], "bytes_5m": r["bytes"], "rate": r["rate"],
+                     "rate_h": human(r["rate"]).strip() + "/s" if r["rate"] is not None else None,
+                     "bytes_5m_h": human(r["bytes"]).strip(), "flows": r["flows"], "dests": r["ndest"],
+                     "alerts": r["alerts"], "link": r["link"], "quarantined": r["quar"],
+                     "last_seen": r["seen"], "ago": ago(r["seen"]) if r["seen"] else None}
+                    for r in m.clients()],
+        "top_dests": [{"dest": k, "bytes": b, "bytes_h": human(b).strip(), "client": c, "client_name": m.name(c)}
+                      for k, b, c in m.top_dests(n=10)],
+        "alerts": [{"ts": a.get("ts"), "level": a.get("level"), "kind": a.get("kind"), "title": a.get("title"),
+                    "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "action": a.get("action")}
+                   for a in [a for a in m.alerts if a.get("level") != "INFO"][-30:][::-1]],
+        "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
+                    "client_name": m.name(c), "label": label}
+                   for ts, c, label in m.recent_dests(30)],
+    }
+
+
+WEB_HTML = r"""<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ExitGuard</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--mute:#6a737d;--line:#e3e6ea;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--info:#0969da;--hdr:#0b3d91}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#161b22;--fg:#e6edf3;--mute:#8b949e;--line:#30363d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--info:#58a6ff;--hdr:#1f3b70}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif}
+header{background:var(--hdr);color:#fff;padding:10px 16px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+header h1{font-size:17px;margin:0}
+header .sub{opacity:.85;font-size:13px}
+.badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;background:#ffffff30;margin-left:4px}
+main{padding:12px 16px;display:grid;gap:12px;grid-template-columns:1fr;max-width:1200px;margin:0 auto}
+@media (min-width:900px){main{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transform:none}
+.stat{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.info{color:var(--info)}.mute{color:var(--mute)}
+.row{border-top:1px solid var(--line);padding:7px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+.row:first-of-type{border-top:0}
+.row .main{flex:1 1 100%;font-weight:600;word-break:break-all}
+.row .k{font-size:12px;color:var(--mute)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.lv{font-size:11px;font-weight:700;padding:0 5px;border-radius:4px;border:1px solid currentColor}
+.empty{color:var(--mute);padding:6px 0}
+footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
+</style></head><body>
+<header><h1>ExitGuard<span id="demo" class="badge" hidden>DEMO</span></h1>
+<span class="sub" id="host">…</span><span class="sub" id="when"></span></header>
+<main>
+<section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
+<section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div></section>
+<section><h2>알림 (최신순)</h2><div id="alerts"></div></section>
+<section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
+<section><h2>실시간 접속지 (SNI / DNS / HTTP)</h2><div id="recent"></div></section>
+</main>
+<footer>읽기 전용 · 2초마다 갱신 · <span id="err"></span></footer>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=String(text); return e;}
+const LV = {CRITICAL:"bad",HIGH:"bad",MEDIUM:"warn",LOW:"info",INFO:"mute"};
+function fill(box, items, render, emptyText){
+  box.replaceChildren();
+  if(!items.length){box.append(el("div","empty",emptyText)); return;}
+  for(const it of items) box.append(render(it));
+}
+function hms(iso){return iso ? String(iso).slice(11,19) : "";}
+function render(s){
+  $("demo").hidden = !s.demo;
+  $("host").textContent = s.host + " · exit node: " + (s.exit_node_approved ? "승인됨" : "미승인/미광고");
+  $("when").textContent = hms(s.generated);
+  const st = $("status"); st.replaceChildren();
+  for(const [name, v] of Object.entries(s.services)){
+    st.append(el("span", v==="active" ? "ok" : "bad", (v==="active" ? "● " : "✖ ") + name));
+  }
+  const c = s.capture;
+  st.append(el("span", c.drop_pct > 1 ? "bad" : "", "캡처 " + c.packets.toLocaleString() + " pkt · 드롭 " + c.drops.toLocaleString() + " (" + c.drop_pct.toFixed(2) + "%)"));
+  const a = s.alerts_24h;
+  st.append(el("span", (a.CRITICAL + a.HIGH) ? "bad" : a.MEDIUM ? "warn" : "", "24h 알림 C" + a.CRITICAL + " H" + a.HIGH + " M" + a.MEDIUM + " L" + a.LOW));
+  st.append(el("span", s.quarantined ? "bad" : "", s.nft_visible ? ("차단 " + s.blocked + " · 격리 " + s.quarantined) : "차단/격리: root 필요"));
+
+  fill($("clients"), s.clients, r => {
+    const d = el("div","row" + (r.quarantined ? " bad" : r.alerts ? " warn" : ""));
+    d.append(el("div","main", r.name + (r.quarantined ? " ⛔ 격리" : "")));
+    d.append(el("span","mono", r.ip));
+    d.append(el("span","k", r.rate_h ? "속도 " + r.rate_h : "5분 " + r.bytes_5m_h));
+    d.append(el("span","k", "플로우 " + r.flows + " · 목적지 " + r.dests + " · 알림 " + r.alerts));
+    d.append(el("span","k", r.link + " · " + (r.ago || "-")));
+    return d;
+  }, "아직 이 exit node 를 지나는 트래픽이 없습니다.");
+
+  fill($("alerts"), s.alerts, x => {
+    const d = el("div","row");
+    const lv = el("span","lv " + (LV[x.level] || ""), x.level); d.append(lv);
+    d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
+    d.append(el("div","main", (x.title || "") + (x.action && !String(x.action).includes("실패") ? " ⛔" : "")));
+    if(x.action) d.append(el("span","k", x.action));
+    return d;
+  }, "알림 없음");
+
+  fill($("dests"), s.top_dests, x => {
+    const d = el("div","row");
+    d.append(el("div","main mono", x.dest));
+    d.append(el("span","k", x.bytes_h + " ← " + x.client_name));
+    return d;
+  }, "최근 2분 트래픽 없음");
+
+  fill($("recent"), s.recent, x => {
+    const d = el("div","row");
+    d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
+    d.append(el("div","main mono", x.label));
+    return d;
+  }, "아직 없음");
+}
+async function tick(){
+  try{
+    const r = await fetch("api/snapshot", {cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json()); $("err").textContent = "";
+  }catch(e){ $("err").textContent = "연결 오류: " + e.message; }
+  finally{ setTimeout(tick, 2000); }
+}
+tick();
+</script></body></html>
+"""
+
+
+def _opt(name, default):
+    """--name VALUE 또는 --name=VALUE."""
+    for i, a in enumerate(sys.argv):
+        if a == name and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return default
+
+
+def make_web_server(m, host="127.0.0.1", port=8080):
+    """읽기 전용 HTTP 서버. GET / 와 GET /api/snapshot 만 응답하고 나머지 메서드는 405."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    lock = threading.Lock(); state = {"t": 0.0}
+    page = WEB_HTML.encode()
+
+    def current():
+        with lock:   # Model 은 스레드 안전하지 않으므로 갱신·집계를 한 번에 하나만
+            if time.time() - state["t"] >= 1.0:
+                m.refresh(); state["t"] = time.time()
+            return json.dumps(snapshot(m), ensure_ascii=False).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "ExitGuardWeb"
+        sys_version = ""
+
+        def _send(self, code, body, ctype):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy",
+                             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                             "connect-src 'self'; frame-ancestors *")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path in ("/", "/index.html"):
+                self._send(200, page, "text/html; charset=utf-8")
+            elif path == "/api/snapshot":
+                self._send(200, current(), "application/json; charset=utf-8")
+            else:
+                self._send(404, b"not found\n", "text/plain; charset=utf-8")
+
+        do_HEAD = do_GET
+
+        def _readonly(self):
+            self._send(405, "읽기 전용 대시보드입니다\n".encode(), "text/plain; charset=utf-8")
+
+        do_POST = do_PUT = do_DELETE = do_PATCH = _readonly
+
+        def log_message(self, fmt, *args):   # 2초 폴링 로그로 터미널을 채우지 않는다
+            pass
+
+    import socket
+
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+        address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    srv = Server((host, port), Handler)
+    return srv
+
+
+def serve_web(m):
+    host = _opt("--host", "127.0.0.1")
+    port = int(_opt("--port", "8080"))
+    srv = make_web_server(m, host, port)
+    h, p = srv.server_address[:2]
+    print(f"ExitGuard web (읽기 전용): http://{h if ':' not in h else '[' + h + ']'}:{p}/" + ("  [demo]" if DEMO else ""), flush=True)
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print("주의: 루프백 외 주소에 바인딩됨. 인증이 없으므로 신뢰할 수 있는 네트워크/경로(Tailscale serve 등)에서만 쓰세요.", flush=True)
+    try:
+        srv.serve_forever()
+    finally:
+        srv.server_close()
+
+
 def main():
     m = DemoModel() if DEMO else Model()
+    if "--web" in sys.argv:
+        serve_web(m); return
     if "--text" in sys.argv:
         text_snapshot(m); return
     os.environ.setdefault("ESCDELAY", "25")

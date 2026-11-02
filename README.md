@@ -23,7 +23,7 @@
 | `exitguard-report.timer` | 매일 09:00 리포트(`/var/log/exitguard/reports/`) + 알림 채널 전송 |
 | `exitguard-rules.timer` | 매일 04:30 룰 갱신 후 무중단 리로드 |
 | `exitguardctl` | 상태/알림/수동 차단/격리/pcap 캡처 CLI |
-| `exitguard-top` | curses 대시보드. 원격 SSH 에서 한 화면으로 상태 파악, root 면 즉시 조치 |
+| `exitguard-top` | curses 대시보드. 원격 SSH 에서 한 화면으로 상태 파악, root 면 즉시 조치. `--web` 은 읽기 전용 브라우저 대시보드 |
 
 ## 설치
 
@@ -60,6 +60,7 @@ macOS·Replit 등 어디서나 바로 실행된다. 아무것도 차단하지 �
 ```bash
 python3 exitguard/dash.py --demo          # curses 대시보드 (q 종료)
 python3 exitguard/dash.py --demo --text   # 스냅샷 한 번 출력
+python3 exitguard/dash.py --demo --web    # 브라우저 대시보드 → http://127.0.0.1:8080/
 ```
 
 데모 데이터는 임의의 CGNAT 주소, 문서용 IP 대역(RFC 5737), 예시 도메인(RFC 2606)만 사용한다.
@@ -104,6 +105,32 @@ exitguard-top --text     # 한 번 출력(스크립트/좁은 터미널용)
 - 상위 목적지(폭 130 이상일 때): 최근 2분 바이트 기준.
 - 좁은 터미널: 폭 80 미만이면 IP 열을 숨기고, 60 미만이면 기기명·속도·알림만 보여준다. 상태줄은 한 줄에 안 들어가면 2줄로 나뉜다.
 - 키: `q` 종료, `+`/`-` 갱신 주기, root 일 때 `b` 차단 / `u` 해제 / `Q` 격리 / `R` 격리 해제 / `c` pcap 캡처.
+
+## 웹 대시보드 (읽기 전용, 브라우저·폰)
+
+같은 데이터를 브라우저에서 본다. 표준 라이브러리(`http.server`)만 쓰고, 페이지는 인라인 CSS/JS 한 장이며 2초마다 갱신된다.
+폰 폭(375px)에서는 세로 한 줄로, 넓은 화면에서는 2열로 보인다.
+
+```bash
+exitguard-top --web                          # http://127.0.0.1:8080/
+exitguard-top --web --host 127.0.0.1 --port 9000
+python3 exitguard/dash.py --demo --web       # 설치 없이 데모 데이터로
+```
+
+| 경로 | 내용 |
+|---|---|
+| `GET /` | 대시보드 HTML |
+| `GET /api/snapshot` | 상태·클라이언트·상위 목적지·알림·실시간 접속지 JSON |
+
+- **읽기 전용**: 차단·격리·pcap 같은 조치는 웹에 없다. GET 외 메서드는 405. 조치는 터미널(`sudo exitguard-top`, `exitguardctl`)에서만.
+- 기본 바인딩은 `127.0.0.1:8080`. Replit 미리보기처럼 외부 포트 포워딩이 필요한 환경에서는 `--host 0.0.0.0` 을 쓴다.
+
+> ⚠️ **인증이 없다.** 접속 기기·목적지·알림이 그대로 보이므로 `--host 0.0.0.0` 으로 인터넷에 직접 열지 말 것.
+> 외부(폰 등)에서 보려면 루프백에 둔 채 **Tailscale serve** 같은 인증된 경로로 노출한다:
+> `sudo tailscale serve --bg 8080` → tailnet 안의 기기에서만 `https://<이 머신>.<tailnet>.ts.net/` 로 접속.
+> `tailscale funnel` 은 공개 인터넷 노출이므로 쓰지 않는다.
+
+<img src="docs/web-demo-phone.png" width="300" alt="데모 데이터로 띄운 웹 대시보드 (폰 폭)">
 
 ## 운용
 

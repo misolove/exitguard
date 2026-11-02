@@ -1,0 +1,93 @@
+"""웹 대시보드(--demo --web) 와 기존 --demo --text 출력 회귀 테스트. 표준 라이브러리만 사용.
+실행: python3 -m unittest discover -s tests -v
+"""
+import json, os, re, subprocess, sys, unittest, urllib.error, urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DASH = os.path.join(ROOT, "exitguard", "dash.py")
+GOLDEN = os.path.join(ROOT, "tests", "demo_text.golden")
+
+
+def mask(text):
+    """시각만 다른 부분을 지워 비교 가능하게 한다."""
+    text = re.sub(r"\d{2}:\d{2}:\d{2}", "HH:MM:SS", text)
+    return re.sub(r"\d{4}-\d{2}-\d{2}", "YYYY-MM-DD", text)
+
+
+class WebDemoTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # --port 0: OS 가 빈 포트를 고르고, 서버가 첫 줄에 실제 URL 을 출력한다
+        cls.proc = subprocess.Popen([sys.executable, DASH, "--demo", "--web", "--port", "0"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        line = cls.proc.stdout.readline()
+        m = re.search(r"http://[^\s/]+:\d+/", line)
+        if not m:
+            cls.proc.kill()
+            raise RuntimeError(f"서버 시작 실패: {line!r} {cls.proc.stderr.read()}")
+        cls.base = m.group(0)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        try:
+            cls.proc.wait(5)
+        except subprocess.TimeoutExpired:
+            cls.proc.kill()
+        cls.proc.stdout.close(); cls.proc.stderr.close()
+
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path, timeout=10) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+
+    def test_binds_loopback_by_default(self):
+        self.assertTrue(self.base.startswith("http://127.0.0.1:"), self.base)
+
+    def test_snapshot_is_json_with_three_clients(self):
+        status, ctype, body = self.get("api/snapshot")
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", ctype)
+        snap = json.loads(body)
+        self.assertTrue(snap["demo"])
+        names = sorted(c["name"] for c in snap["clients"])
+        self.assertEqual(names, ["demo-laptop", "demo-phone", "demo-tablet"])
+        for key in ("top_dests", "alerts", "recent"):
+            self.assertIsInstance(snap[key], list)
+            self.assertTrue(snap[key], f"{key} 가 비어 있음")
+
+    def test_index_html_is_self_contained(self):
+        status, ctype, body = self.get("")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", ctype)
+        html = body.decode()
+        self.assertIn("api/snapshot", html)
+        self.assertIn('name="viewport"', html)
+        self.assertNotRegex(html, r"""(src|href)=["']?(https?:)?//""")   # CDN/외부 리소스 없음
+
+    def test_read_only(self):
+        for method in ("POST", "PUT", "DELETE"):
+            req = urllib.request.Request(self.base + "api/snapshot", data=b"{}", method=method)
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req, timeout=10)
+            self.assertEqual(cm.exception.code, 405)
+        html = self.get("")[2].decode()
+        # 조치 UI 나 GET 이외 요청이 페이지에 없어야 한다
+        for pat in (r"<form", r"<button", r"<input", r"method\s*:", r"\bpcap\b", r"\bquarantine\b", r"/api/(block|quar)"):
+            self.assertNotRegex(html, pat)
+
+    def test_unknown_path_404(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(self.base + "api/block", timeout=10)
+        self.assertEqual(cm.exception.code, 404)
+
+
+class TextDemoUnchangedTest(unittest.TestCase):
+    def test_demo_text_matches_golden(self):
+        out = subprocess.run([sys.executable, DASH, "--demo", "--text"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        with open(GOLDEN, encoding="utf-8") as f:
+            self.assertEqual(mask(out.stdout), f.read())
+
+
+if __name__ == "__main__":
+    unittest.main()
