@@ -67,7 +67,7 @@ python3 exitguard/dash.py --demo --web    # 브라우저 대시보드 → http:/
 
 ## 테스트
 
-데모 모드로 대시보드를 검사한다. 표준 라이브러리(`unittest`, `pty`)만 쓰므로 추가 설치가 필요 없고,
+데모 모드로 대시보드(curses·`--text`·`--web`)를 검사한다. 표준 라이브러리(`unittest`, `pty`)만 쓰므로 추가 설치가 필요 없고,
 Suricata·nftables·Tailscale·root 권한도 필요 없다. pty 를 쓰므로 Linux·macOS 에서 실행한다.
 PR 과 main 푸시마다 GitHub Actions(`.github/workflows/test.yml`)가 Ubuntu Python 3.9~3.13, macOS Python 3.13 에서 자동 실행한다.
 
@@ -81,13 +81,14 @@ python3 -m unittest tests.test_dash_layout.TestVirtualScreen -v   # 가상 화�
 | `TestNarrowLayout` | pty 로 폭 40/60/80/150 터미널을 만들어 curses 화면이 예외 없이 그려지고 `q` 로 종료되는지 |
 | `TestNarrowLayoutRoot` | 같은 확인을 root 모드로. `IS_ROOT` 는 테스트 프로세스 안에서만 켜고 차단/격리 조치는 막는다 |
 | `TestVirtualScreen` | 가짜 curses 창에 그려 폭 38~160 전 구간에서 줄이 화면 폭을 넘지 않는지, 폭별 축약 표기(상태줄·하단 안내·클라이언트 열)가 맞는지 |
-| `TestTextOutput` | `--demo --text` 출력이 `tests/golden_text_demo.txt` 와 같은지 (시각만 가리고 비교) |
+| `WebDemoTest` (`test_web.py`) | `--demo --web` 서버: 기본 루프백 바인드, JSON 스냅샷, 읽기 전용(GET 외 405), 없는 경로 404 |
+| `TextDemoUnchangedTest` (`test_web.py`) | `--demo --text` 출력이 `tests/demo_text.golden` 과 같은지 (시각만 가리고 비교) |
 
 `--text` 출력 형식을 일부러 바꿨다면 기준 파일을 다시 만든다(변경 내용을 diff 로 확인한 뒤 커밋):
 
 ```bash
-python3 -c "import subprocess,sys; sys.path.insert(0,'tests'); from test_dash_layout import mask_text; \
-open('tests/golden_text_demo.txt','w').write(mask_text(subprocess.run([sys.executable,'exitguard/dash.py','--demo','--text'],capture_output=True,text=True).stdout))"
+python3 -c "import subprocess,sys; sys.path.insert(0,'tests'); from test_web import mask; \
+open('tests/demo_text.golden','w').write(mask(subprocess.run([sys.executable,'exitguard/dash.py','--demo','--text'],capture_output=True,text=True).stdout))"
 ```
 
 ## 대시보드 (원격 터미널)

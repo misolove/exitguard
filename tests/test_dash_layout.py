@@ -4,15 +4,14 @@
 - pty 로 폭 40/60/80/150 터미널을 만들어 curses 대시보드를 띄우고, 예외 없이 그려진 뒤 q 로 종료되는지 확인
 - 같은 확인을 root 모드(IS_ROOT=True)로도 수행. 테스트 프로세스 안에서만 바꾸고 nft 조치는 막는다
 - 가상 화면(가짜 curses 창)에 draw() 를 그려 폭별 축약 표기 내용과 "모든 줄이 화면 폭 안" 을 확인 (root/일반)
-- --demo --text 출력이 기준 파일(tests/golden_text_demo.txt)과 같은지 확인 (시각만 가림)
+(--demo --text 출력 회귀 검사는 tests/test_web.py 의 TextDemoUnchangedTest 가 맡는다)
 
 실행: python3 -m unittest discover -s tests -v   또는   python3 tests/test_dash_layout.py
 """
-import importlib.util, fcntl, os, pty, re, select, signal, struct, subprocess, sys, termios, time, unittest
+import importlib.util, fcntl, os, pty, select, signal, struct, sys, termios, time, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DASH = os.path.join(ROOT, "exitguard", "dash.py")
-GOLDEN = os.path.join(ROOT, "tests", "golden_text_demo.txt")
 UTF8 = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"   # macOS 는 C.UTF-8 로케일이 없을 수 있다
 ENV = dict(os.environ, TERM="xterm-256color", LANG=UTF8, LC_ALL=UTF8)
 for k in ("LINES", "COLUMNS"):
@@ -88,11 +87,6 @@ def run_tui(cols, rows=24, settle=2.5, timeout=10.0, root=False):
         return os.waitstatus_to_exitcode(status), out
     finally:
         os.close(fd)
-
-
-def mask_text(s):
-    s = re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", "YYYY-MM-DD hh:mm:ss", s)
-    return re.sub(r"\b\d{2}:\d{2}:\d{2}\b", "hh:mm:ss", s)
 
 
 class TestNarrowLayout(unittest.TestCase):
@@ -256,14 +250,6 @@ class TestVirtualScreen(unittest.TestCase):
             rows = self.render(W, False)
             self.assertIn("sudo", rows[-1], f"W={W}")
             self.assertRegex(" ".join(self.status_rows(rows)), r"root", f"W={W}")
-
-
-class TestTextOutput(unittest.TestCase):
-    def test_text_unchanged(self):
-        out = subprocess.run([sys.executable, DASH, "--demo", "--text"], capture_output=True, text=True,
-                             env=ENV, timeout=30, check=True).stdout
-        with open(GOLDEN, encoding="utf-8") as f:
-            self.assertEqual(mask_text(out), f.read())
 
 
 if __name__ == "__main__":
