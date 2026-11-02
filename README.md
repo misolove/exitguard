@@ -52,6 +52,18 @@ sudo ./install.sh
 - `notify.min_level`: 이 등급 이상만 데스크톱/webhook/Telegram 으로 발송(기본 MEDIUM). 모든 등급은 `alerts.log` 에 기록.
 - 외부 알림: `notify.webhook_url`(Discord/Slack 호환 JSON) 또는 `notify.telegram.{bot_token,chat_id}` 입력 후 `sudo systemctl restart exitguard-watch`.
 
+## 데모 모드 (설치 없이 화면만 보기)
+
+Suricata·nftables·Tailscale 없이 가짜 데이터로 대시보드를 띄운다. Python 3 표준 라이브러리만 쓰므로
+macOS·Replit 등 어디서나 바로 실행된다. 아무것도 차단하지 않으며, root 로 실행해도 조치 키는 꺼진다.
+
+```bash
+python3 exitguard/dash.py --demo          # curses 대시보드 (q 종료)
+python3 exitguard/dash.py --demo --text   # 스냅샷 한 번 출력
+```
+
+데모 데이터는 임의의 CGNAT 주소, 문서용 IP 대역(RFC 5737), 예시 도메인(RFC 2606)만 사용한다.
+
 ## 대시보드 (원격 터미널)
 
 ```bash
@@ -93,3 +105,7 @@ exitguardctl logs              # watcher 서비스 로그
 - ET Open 룰은 오탐이 있을 수 있음. 특정 sid 를 무시하려면 `/etc/suricata/disable.conf` 에 sid 추가 후 `exitguardctl rules-update`.
 - Suricata 가 TLS 내부는 볼 수 없음(SNI/JA3/인증서까지만). 그래서 DNS·목적지·행위 기반 탐지를 함께 사용.
 - 제거: `sudo ./uninstall.sh`
+
+## 라이선스
+
+MIT — [LICENSE](LICENSE)

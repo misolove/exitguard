@@ -2,6 +2,7 @@
 """ExitGuard 터미널 대시보드 (curses). 원격 SSH 에서 한 화면으로 상태 파악.
 사용: exitguard-top            (일반 사용자: 조회만 / root: 차단·격리 조치 가능)
       exitguard-top --text     (curses 없이 스냅샷 한 번 출력)
+      exitguard-top --demo     (가짜 데이터로 화면 시연. --text 와 함께 쓸 수 있음)
 """
 import collections, curses, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
@@ -10,7 +11,8 @@ CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
 ALERTS = "/var/log/exitguard/alerts.jsonl"
 HOME = [ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48")]
-IS_ROOT = os.geteuid() == 0
+DEMO = "--demo" in sys.argv
+IS_ROOT = os.geteuid() == 0 and not DEMO   # 데모에서는 실제 차단/격리 명령을 막는다
 
 
 def is_home(ip):
@@ -262,6 +264,68 @@ class Model:
         return list(self.dests)[-n:][::-1]
 
 
+class DemoModel(Model):
+    """가짜 데이터로 화면만 보여주는 모드. Suricata/nftables/tailscale 없이 동작하고 아무것도 차단하지 않는다.
+    IP 는 CGNAT 대역의 임의 값과 문서용 대역(RFC 5737), 도메인은 예시용(RFC 2606)만 쓴다."""
+    CLIENTS = {"100.64.0.11": "demo-phone", "100.64.0.12": "demo-laptop", "100.64.0.13": "demo-tablet"}
+    SITES = [("198.51.100.10", 443, "tcp", "tls", "news.example.com"), ("198.51.100.20", 443, "udp", "quic", "video.example.net"),
+             ("203.0.113.5", 443, "tcp", "tls", "mail.example.org"), ("203.0.113.40", 80, "tcp", "http", "update.example.com"),
+             ("192.0.2.53", 53, "udp", "dns", "cdn.example.net")]
+    ALERT_SAMPLES = [("LOW", "ids-alert", "ET INFO 의심 TLD 접속 (demo.example.zip)"),
+                     ("MEDIUM", "dns-dga", "NXDOMAIN 급증: 5분 내 72회"),
+                     ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송"),
+                     ("HIGH", "ids-alert", "ET MALWARE 알려진 C2 비컨 패턴 (데모)")]
+
+    def __init__(self):
+        super().__init__()
+        import random
+        self.rnd = random.Random(7)
+        self.names = dict(self.CLIENTS); self.names["100.64.0.1"] = "demo-exit"
+        self.ts_self = {"HostName": "demo-exit", "ExitNodeOption": True, "TailscaleIPs": ["100.64.0.1"]}
+        self.ts_peers = {ip: {"HostName": n, "TailscaleIPs": [ip], "CurAddr": "x" if i != 2 else "", "Relay": "tok"}
+                         for i, (ip, n) in enumerate(self.CLIENTS.items())}
+        self.services = {s: "active" for s in ("suricata", "exitguard-watch", "exitguard-nft", "tailscaled")}
+        self.stats = {"capture": {"kernel_packets": 0, "kernel_drops": 0}, "uptime": 0}
+        self.totals = {ip: 0 for ip in self.CLIENTS}
+        self.t0 = time.time()
+        now = time.time()
+        for i, (lv, kind, title) in enumerate(self.ALERT_SAMPLES):
+            ts = datetime.fromtimestamp(now - (len(self.ALERT_SAMPLES) - i) * 900).isoformat(timespec="seconds")
+            self.alerts.append({"ts": ts, "level": lv, "kind": kind, "title": title, "client": list(self.CLIENTS)[i % 3],
+                                "action": "목적지 24h 차단" if lv == "HIGH" else None})
+        self.nft["blocked"] = {"203.0.113.66": {}}
+
+    def read_slow(self):
+        pass
+
+    def read_alerts(self):
+        if self.rnd.random() < 0.03:
+            lv, kind, title = self.rnd.choice(self.ALERT_SAMPLES[:3])
+            self.alerts.append({"ts": datetime.now().isoformat(timespec="seconds"), "level": lv, "kind": kind,
+                                "title": title, "client": self.rnd.choice(list(self.CLIENTS)), "action": None})
+            self.alerts = self.alerts[-500:]
+
+    def read_eve(self):
+        now = time.time(); r = self.rnd
+        cap = self.stats["capture"]
+        cap["kernel_packets"] += r.randint(800, 2500); cap["kernel_drops"] += r.random() < 0.1
+        self.stats["uptime"] = int(now - self.t0) + 3600
+        for ip in self.CLIENTS:
+            for _ in range(r.randint(1, 4)):
+                ext, port, proto, app, host = r.choice(self.SITES)
+                b = int(r.expovariate(1 / 200_000))
+                self.flows.append((now, ip, ext, port, proto, b, app))
+                self.dests.append((now, ip, f"{host} [{app}]"))
+                self.last_seen[ip] = now
+                self.totals[ip] += b
+
+    def read_nft(self):
+        self.nft["clients"] = {ip: {"counter": {"bytes": b}} for ip, b in self.totals.items()}
+        self.rates = {ip: b / 2 for ip, b in self.totals.items()} if not self._prev_t else \
+            {ip: max(0, b - self._prev_nft.get(ip, 0)) / 2 for ip, b in self.totals.items()}
+        self._prev_nft = dict(self.totals); self._prev_t = time.time()
+
+
 # ---------------------------------------------------------------- render
 LEVEL_COLOR = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 3}
 
@@ -464,7 +528,7 @@ def text_snapshot(m):
 
 
 def main():
-    m = Model()
+    m = DemoModel() if DEMO else Model()
     if "--text" in sys.argv:
         text_snapshot(m); return
     os.environ.setdefault("ESCDELAY", "25")
