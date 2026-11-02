@@ -266,6 +266,10 @@ class Model:
         out.sort(key=lambda x: -(x["rate"] or 0) * 1e9 - x["bytes"])
         return out
 
+    def geo(self, win=120):
+        """목적지 좌표. 실제 모드는 아직 GeoIP 조회가 없어 비어 있다 (데모만 가짜 좌표)."""
+        return {"home": None, "points": []}
+
     def top_dests(self, win=120, n=15):
         now = time.time(); agg = collections.Counter(); who = {}
         for ts, c, ext, port, proto, b, app in self.flows:
@@ -286,6 +290,11 @@ class DemoModel(Model):
     SITES = [("198.51.100.10", 443, "tcp", "tls", "news.example.com"), ("198.51.100.20", 443, "udp", "quic", "video.example.net"),
              ("203.0.113.5", 443, "tcp", "tls", "mail.example.org"), ("203.0.113.40", 80, "tcp", "http", "update.example.com"),
              ("192.0.2.53", 53, "udp", "dns", "cdn.example.net")]
+    # 지도 시연용 가짜 좌표 (위도, 경도, 도시). 실제 위치 조회(GeoIP)가 아니다.
+    HOME_GEO = (37.57, 126.98, "Seoul")
+    GEO = {"198.51.100.10": (35.68, 139.69, "Tokyo"), "198.51.100.20": (39.04, -77.49, "Ashburn"),
+           "203.0.113.5": (50.11, 8.68, "Frankfurt"), "203.0.113.40": (1.35, 103.82, "Singapore"),
+           "192.0.2.53": (37.57, 126.98, "Seoul"), "203.0.113.66": (-23.55, -46.63, "São Paulo")}
     ALERT_SAMPLES = [("LOW", "ids-alert", "ET INFO 의심 TLD 접속 (demo.example.zip)"),
                      ("MEDIUM", "dns-dga", "NXDOMAIN 급증: 5분 내 72회"),
                      ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송"),
@@ -312,6 +321,19 @@ class DemoModel(Model):
 
     def read_slow(self):
         pass
+
+    def geo(self, win=120):
+        now = time.time(); agg = collections.Counter(); host = {}
+        for ts, c, ext, port, proto, b, app in self.flows:
+            if now - ts <= win:
+                agg[ext] += b
+        for ext, port, proto, app, h in self.SITES:
+            host[ext] = h
+        pts = [{"ip": ip, "host": host.get(ip, ""), "city": city, "lat": lat, "lon": lon, "bytes": agg.get(ip, 0),
+                "blocked": ip in self.nft["blocked"]}
+               for ip, (lat, lon, city) in self.GEO.items() if agg.get(ip) or ip in self.nft["blocked"]]
+        lat, lon, city = self.HOME_GEO
+        return {"home": {"city": city, "lat": lat, "lon": lon}, "points": pts}
 
     def read_alerts(self):
         if self.rnd.random() < 0.03:
@@ -701,6 +723,7 @@ def snapshot(m):
         "alerts": [{"ts": a.get("ts"), "level": a.get("level"), "kind": a.get("kind"), "title": a.get("title"),
                     "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "action": a.get("action")}
                    for a in [a for a in m.alerts if a.get("level") != "INFO"][-30:][::-1]],
+        "geo": m.geo(),
         "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
                     "client_name": m.name(c), "label": label}
                    for ts, c, label in m.recent_dests(30)],

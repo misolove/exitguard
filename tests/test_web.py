@@ -55,6 +55,16 @@ class WebDemoTest(unittest.TestCase):
             self.assertIsInstance(snap[key], list)
             self.assertTrue(snap[key], f"{key} 가 비어 있음")
 
+    def test_snapshot_has_demo_geo(self):
+        snap = json.loads(self.get("api/snapshot")[2])
+        geo = snap["geo"]
+        self.assertEqual(geo["home"]["city"], "Seoul")
+        self.assertTrue(geo["points"], "geo.points 가 비어 있음")
+        for p in geo["points"]:
+            self.assertTrue(-90 <= p["lat"] <= 90 and -180 <= p["lon"] <= 180, p)
+            self.assertRegex(p["ip"], r"^(192\.0\.2|198\.51\.100|203\.0\.113)\.")   # 문서용 대역만
+        self.assertTrue(any(p["blocked"] for p in geo["points"]), "차단 목적지가 지도에 없음")
+
     def test_index_html_is_self_contained(self):
         status, ctype, body = self.get("")
         self.assertEqual(status, 200)
