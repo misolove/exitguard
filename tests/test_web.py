@@ -65,6 +65,32 @@ class WebDemoTest(unittest.TestCase):
             self.assertRegex(p["ip"], r"^(192\.0\.2|198\.51\.100|203\.0\.113)\.")   # 문서용 대역만
         self.assertTrue(any(p["blocked"] for p in geo["points"]), "차단 목적지가 지도에 없음")
 
+    def test_snapshot_has_chart_data(self):
+        snap = json.loads(self.get("api/snapshot")[2])
+        ser = snap["series"]
+        self.assertEqual(ser["step"], 10)
+        self.assertTrue(ser["clients"], "series.clients 가 비어 있음")
+        for c in ser["clients"]:
+            self.assertEqual(len(c["bytes"]), 60)
+        self.assertTrue(snap["protos"] and all(p["bytes"] > 0 for p in snap["protos"]))
+        groups = snap["alert_groups"]
+        self.assertTrue(groups)
+        self.assertEqual(sum(g["count"] for g in groups), sum(snap["alerts_24h"].values()))
+        self.assertEqual(groups[0]["level"], "HIGH")   # 등급 높은 묶음이 위로
+
+    def test_static_parts(self):
+        for name, ctype in (("viz.js", "javascript"), ("countries-110m.json", "json"), ("parts.html", "text/html")):
+            status, got, body = self.get("static/" + name)
+            self.assertEqual(status, 200)
+            self.assertIn(ctype, got)
+            if name != "countries-110m.json":
+                # 외부 리소스 없음 (SVG 네임스페이스 문자열만 예외)
+                self.assertNotRegex(body.decode().replace("http://www.w3.org/2000/svg", ""), r"https?://")
+        for bad in ("static/../dash.py", "static/%2e%2e/dash.py", "static/", "static/README.md"):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self.get(bad)
+            self.assertEqual(cm.exception.code, 404)
+
     def test_index_html_is_self_contained(self):
         status, ctype, body = self.get("")
         self.assertEqual(status, 200)

@@ -44,6 +44,7 @@ fi
 install -m 644 "$SRC/etc/nftables-exitguard.conf" "$SRC/etc/nftables-exitguard-min.conf" /etc/exitguard/
 install -m 644 "$SRC/etc/local.rules" /etc/exitguard/local.rules
 install -m 755 "$SRC"/exitguard/*.py "$SRC"/exitguard/rules-update.sh /usr/local/lib/exitguard/
+install -d /usr/local/lib/exitguard/static && install -m 644 "$SRC"/exitguard/static/* /usr/local/lib/exitguard/static/
 install -m 755 "$SRC/bin/exitguardctl" /usr/local/bin/exitguardctl
 ln -sf /usr/local/lib/exitguard/dash.py /usr/local/bin/exitguard-top
 install -m 644 "$SRC"/systemd/*.service "$SRC"/systemd/*.timer /etc/systemd/system/
