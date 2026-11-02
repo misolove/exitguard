@@ -171,7 +171,6 @@ python3 exitguard/dash.py --demo --web       # 설치 없이 데모 데이터로
 > `sudo tailscale serve --bg 8080` → tailnet 안의 기기에서만 `https://<이 머신>.<tailnet>.ts.net/` 로 접속.
 > `tailscale funnel` 은 공개 인터넷 노출이므로 쓰지 않는다.
 
-<img src="docs/web-demo-phone.png" width="300" alt="데모 데이터로 띄운 웹 대시보드 (폰 폭)">
 
 ## 운용
 
