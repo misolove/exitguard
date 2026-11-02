@@ -270,6 +270,28 @@ class Model:
         """목적지 좌표. 실제 모드는 아직 GeoIP 조회가 없어 비어 있다 (데모만 가짜 좌표)."""
         return {"home": None, "points": []}
 
+    def series(self, step=10, n=60):
+        """기기별 바이트를 step 초 칸 n 개로 묶는다 (가장 오래된 칸이 앞). 웹 선 그래프용."""
+        end = int(time.time() // step * step) + step
+        start = end - step * n
+        rows = {}
+        for ts, c, ext, port, proto, b, app in self.flows:
+            if ts >= start:
+                rows.setdefault(c, [0] * n)[min(n - 1, int((ts - start) // step))] += b
+        out = [{"name": self.name(c), "ip": c, "bytes": v} for c, v in rows.items()]
+        out.sort(key=lambda r: -sum(r["bytes"]))
+        return {"step": step, "end": end, "clients": out}
+
+    def protos(self, win=300, n=6):
+        """app_proto 별 바이트 (상위 n-1 개 + 기타)."""
+        now = time.time(); agg = collections.Counter()
+        for ts, c, ext, port, proto, b, app in self.flows:
+            if now - ts <= win:
+                agg[app or proto or "기타"] += b
+        top = agg.most_common(n - 1)
+        rest = sum(agg.values()) - sum(b for _, b in top)
+        return [{"label": k, "bytes": b} for k, b in top] + ([{"label": "기타", "bytes": rest}] if rest else [])
+
     def top_dests(self, win=120, n=15):
         now = time.time(); agg = collections.Counter(); who = {}
         for ts, c, ext, port, proto, b, app in self.flows:
@@ -330,7 +352,7 @@ class DemoModel(Model):
         for ext, port, proto, app, h in self.SITES:
             host[ext] = h
         pts = [{"ip": ip, "host": host.get(ip, ""), "city": city, "lat": lat, "lon": lon, "bytes": agg.get(ip, 0),
-                "blocked": ip in self.nft["blocked"]}
+                "blocked": ip in self.nft["blocked"], "level": "HIGH" if ip in self.nft["blocked"] else None}
                for ip, (lat, lon, city) in self.GEO.items() if agg.get(ip) or ip in self.nft["blocked"]]
         lat, lon, city = self.HOME_GEO
         return {"home": {"city": city, "lat": lat, "lon": lon}, "points": pts}
@@ -690,6 +712,34 @@ def text_snapshot(m):
 # ---------------------------------------------------------------- web (읽기 전용)
 # 같은 Model 을 브라우저로 보여준다. 조치(차단·격리·pcap) 경로는 일부러 두지 않는다: GET 두 개만 처리.
 
+LEVEL_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def alert_groups(m, since, n=20):
+    """같은 (등급, 제목) 알림을 한 줄로 접는다: 횟수·최근 시각·관련 기기. 등급 높은 것, 최근 것 순."""
+    groups = {}
+    for a in m.alerts:
+        lv = a.get("level")
+        if lv == "INFO":
+            continue
+        try:
+            if datetime.fromisoformat(a["ts"]).timestamp() <= since:
+                continue
+        except Exception:
+            continue
+        g = groups.setdefault((lv, a.get("title")), {"level": lv, "kind": a.get("kind"), "title": a.get("title"),
+                                                    "count": 0, "last": "", "clients": [], "action": None})
+        g["count"] += 1
+        if a["ts"] >= g["last"]:
+            g["last"] = a["ts"]; g["action"] = a.get("action") or g["action"]
+        name = m.name(a.get("client") or "-")
+        if name not in g["clients"]:
+            g["clients"].append(name)
+    out = sorted(groups.values(), key=lambda g: g["last"], reverse=True)
+    out.sort(key=lambda g: LEVEL_RANK.get(g["level"], 9))
+    return out[:n]
+
+
 def snapshot(m):
     """Model 상태를 JSON 직렬화 가능한 dict 로. 웹 대시보드 /api/snapshot 응답."""
     now = time.time(); day = now - 86400
@@ -723,6 +773,9 @@ def snapshot(m):
         "alerts": [{"ts": a.get("ts"), "level": a.get("level"), "kind": a.get("kind"), "title": a.get("title"),
                     "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "action": a.get("action")}
                    for a in [a for a in m.alerts if a.get("level") != "INFO"][-30:][::-1]],
+        "alert_groups": alert_groups(m, day),
+        "series": m.series(),
+        "protos": m.protos(),
         "geo": m.geo(),
         "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
                     "client_name": m.name(c), "label": label}
@@ -849,8 +902,14 @@ def _opt(name, default):
     return default
 
 
+STATIC_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "static")
+# 정해진 파일만 내보낸다 (경로 조작 방지). 모두 레포에 들어 있는 파일이고 외부에서 불러오는 것은 없다.
+STATIC_FILES = {"viz.js": "text/javascript; charset=utf-8", "countries-110m.json": "application/json",
+                "parts.html": "text/html; charset=utf-8"}
+
+
 def make_web_server(m, host="127.0.0.1", port=8080):
-    """읽기 전용 HTTP 서버. GET / 와 GET /api/snapshot 만 응답하고 나머지 메서드는 405."""
+    """읽기 전용 HTTP 서버. GET /, /api/snapshot, /static/<허용 파일> 만 응답하고 나머지 메서드는 405."""
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     lock = threading.Lock(); state = {"t": 0.0}
@@ -874,8 +933,8 @@ def make_web_server(m, host="127.0.0.1", port=8080):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy",
-                             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-                             "connect-src 'self'; frame-ancestors *")
+                             "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
+                             "connect-src 'self'; img-src 'self' data:; frame-ancestors *")
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
@@ -886,6 +945,9 @@ def make_web_server(m, host="127.0.0.1", port=8080):
                 self._send(200, page, "text/html; charset=utf-8")
             elif path == "/api/snapshot":
                 self._send(200, current(), "application/json; charset=utf-8")
+            elif path.startswith("/static/") and path[8:] in STATIC_FILES:
+                with open(os.path.join(STATIC_DIR, path[8:]), "rb") as f:
+                    self._send(200, f.read(), STATIC_FILES[path[8:]])
             else:
                 self._send(404, b"not found\n", "text/plain; charset=utf-8")
 
