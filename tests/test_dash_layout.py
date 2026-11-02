@@ -71,12 +71,17 @@ def run_tui(cols, rows=24, settle=2.5, timeout=10.0, root=False):
             wpid, st = os.waitpid(pid, os.WNOHANG)
             if wpid:
                 status = st; break
-        if status is None:
+        # macOS 는 자식 종료 시 pty 가 EIO 대신 EOF 를 먼저 돌려줘 루프가 일찍 끝난다: 잠깐 더 기다려 회수
+        grace = time.time() + 2.0
+        while status is None and time.time() < grace:
             try:
                 wpid, st = os.waitpid(pid, os.WNOHANG)
-                status = st if wpid else None
             except ChildProcessError:
-                pass
+                break
+            if wpid:
+                status = st
+            else:
+                time.sleep(0.05)
         if status is None:
             os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)
             return None, out
