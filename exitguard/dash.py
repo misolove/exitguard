@@ -495,16 +495,19 @@ class UI:
 
     def footer(self, H, W):
         m = self.m
+        msg = f" {m.msg}" if m.msg else ""
         if W >= WIDE_W:
-            foot = " q 종료  +/- 주기  " + ("b 차단  u 해제  Q 격리  R 격리해제  c pcap " if IS_ROOT else "(조치하려면 sudo 로 실행) ")
-        elif IS_ROOT:
-            foot = first_fit([" q 종료  +/- 주기  b 차단  u 해제  Q 격리  R 격리해제  c pcap ",
-                              " q종료 +/-주기 b차단 u해제 Q격리 R격리해제 c pcap ",
-                              " q종료 +/- b차단 u해제 Q격리 R해제 c캡처 ", " q +- b u Q R c "], W - 1)
+            foot = " q 종료  +/- 주기  " + ("b 차단  u 해제  Q 격리  R 격리해제  c pcap " if IS_ROOT else "(조치하려면 sudo 로 실행) ") + msg
         else:
-            foot = first_fit([" q 종료  +/- 주기  (조치하려면 sudo 로 실행) ", " q 종료  +/- 주기  (조치: sudo) ",
-                              " q 종료  +/- 주기 "], W - 1)
-        foot += f" {m.msg}" if m.msg else ""
+            if IS_ROOT:
+                cands = [" q 종료  +/- 주기  b 차단  u 해제  Q 격리  R 격리해제  c pcap ",
+                         " q종료 +/-주기 b차단 u해제 Q격리 R격리해제 c pcap ",
+                         " q종료 +/- b차단 u해제 Q격리 R해제 c캡처 ", " q종료 b차단 u해제 Q격리 R해제 c캡처 ", " q b u Q R c "]
+            else:
+                cands = [" q 종료  +/- 주기  (조치하려면 sudo 로 실행) ", " q 종료  +/- 주기  (조치: sudo) ",
+                         " q 종료  +/- 주기 ", " q 종료 "]
+            # 조치 결과 메시지(실패 사유 등)가 있으면 단축키 안내를 줄여서라도 메시지를 먼저 보여준다
+            foot = first_fit([c + msg for c in cands], W - 1)
         self.put(H - 1, 0, fit(foot, W - 1), curses.A_REVERSE)
 
     def panel_clients(self, y, x, h, w):
