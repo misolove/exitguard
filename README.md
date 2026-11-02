@@ -65,6 +65,32 @@ python3 exitguard/dash.py --demo --web    # 브라우저 대시보드 → http:/
 
 데모 데이터는 임의의 CGNAT 주소, 문서용 IP 대역(RFC 5737), 예시 도메인(RFC 2606)만 사용한다.
 
+## 테스트
+
+데모 모드로 대시보드(curses·`--text`·`--web`)를 검사한다. 표준 라이브러리(`unittest`, `pty`)만 쓰므로 추가 설치가 필요 없고,
+Suricata·nftables·Tailscale·root 권한도 필요 없다. pty 를 쓰므로 Linux·macOS 에서 실행한다.
+PR 과 main 푸시마다 GitHub Actions(`.github/workflows/test.yml`)가 Ubuntu Python 3.9~3.13, macOS Python 3.13 에서 자동 실행한다.
+
+```bash
+python3 -m unittest discover -s tests -v                    # 전체 (약 20~30초)
+python3 -m unittest tests.test_dash_layout.TestVirtualScreen -v   # 가상 화면 검사만 (1초 내외)
+```
+
+| 테스트 | 확인 내용 |
+|---|---|
+| `TestNarrowLayout` | pty 로 폭 40/60/80/150 터미널을 만들어 curses 화면이 예외 없이 그려지고 `q` 로 종료되는지 |
+| `TestNarrowLayoutRoot` | 같은 확인을 root 모드로. `IS_ROOT` 는 테스트 프로세스 안에서만 켜고 차단/격리 조치는 막는다 |
+| `TestVirtualScreen` | 가짜 curses 창에 그려 폭 38~160 전 구간에서 줄이 화면 폭을 넘지 않는지, 폭별 축약 표기(상태줄·하단 안내·클라이언트 열)가 맞는지 |
+| `WebDemoTest` (`test_web.py`) | `--demo --web` 서버: 기본 루프백 바인드, JSON 스냅샷, 읽기 전용(GET 외 405), 없는 경로 404 |
+| `TextDemoUnchangedTest` (`test_web.py`) | `--demo --text` 출력이 `tests/demo_text.golden` 과 같은지 (시각만 가리고 비교) |
+
+`--text` 출력 형식을 일부러 바꿨다면 기준 파일을 다시 만든다(변경 내용을 diff 로 확인한 뒤 커밋):
+
+```bash
+python3 -c "import subprocess,sys; sys.path.insert(0,'tests'); from test_web import mask; \
+open('tests/demo_text.golden','w').write(mask(subprocess.run([sys.executable,'exitguard/dash.py','--demo','--text'],capture_output=True,text=True).stdout))"
+```
+
 ## 대시보드 (원격 터미널)
 
 ```bash
@@ -78,6 +104,7 @@ exitguard-top --text     # 한 번 출력(스크립트/좁은 터미널용)
 - 알림 패널: 최신순, 등급별 색(빨강 HIGH/CRITICAL, 노랑 MEDIUM, 청록 LOW). 자동 조치된 건은 ⛔.
 - 실시간 접속지: TLS/QUIC SNI, DNS 질의, HTTP 호스트를 기기별로 흘려 보여줌.
 - 상위 목적지(폭 130 이상일 때): 최근 2분 바이트 기준.
+- 좁은 터미널: 폭 80 미만이면 IP 열을 숨기고, 60 미만이면 기기명·속도·알림만 보여준다. 상태줄은 한 줄에 안 들어가면 2줄로 나뉜다.
 - 키: `q` 종료, `+`/`-` 갱신 주기, root 일 때 `b` 차단 / `u` 해제 / `Q` 격리 / `R` 격리 해제 / `c` pcap 캡처.
 
 ## 웹 대시보드 (읽기 전용, 브라우저·폰)
