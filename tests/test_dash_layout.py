@@ -13,7 +13,8 @@ import importlib.util, fcntl, os, pty, re, select, signal, struct, subprocess, s
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DASH = os.path.join(ROOT, "exitguard", "dash.py")
 GOLDEN = os.path.join(ROOT, "tests", "golden_text_demo.txt")
-ENV = dict(os.environ, TERM="xterm-256color", LANG="C.UTF-8", LC_ALL="C.UTF-8")
+UTF8 = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"   # macOS 는 C.UTF-8 로케일이 없을 수 있다
+ENV = dict(os.environ, TERM="xterm-256color", LANG=UTF8, LC_ALL=UTF8)
 for k in ("LINES", "COLUMNS"):
     ENV.pop(k, None)
 

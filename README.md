@@ -68,6 +68,7 @@ python3 exitguard/dash.py --demo --text   # 스냅샷 한 번 출력
 
 데모 모드로 대시보드를 검사한다. 표준 라이브러리(`unittest`, `pty`)만 쓰므로 추가 설치가 필요 없고,
 Suricata·nftables·Tailscale·root 권한도 필요 없다. pty 를 쓰므로 Linux·macOS 에서 실행한다.
+PR 과 main 푸시마다 GitHub Actions(`.github/workflows/test.yml`)가 Ubuntu Python 3.9~3.13, macOS Python 3.13 에서 자동 실행한다.
 
 ```bash
 python3 -m unittest discover -s tests -v                    # 전체 (약 20~30초)
