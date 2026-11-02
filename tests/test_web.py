@@ -64,6 +64,15 @@ class WebDemoTest(unittest.TestCase):
             self.assertTrue(-90 <= p["lat"] <= 90 and -180 <= p["lon"] <= 180, p)
             self.assertRegex(p["ip"], r"^(192\.0\.2|198\.51\.100|203\.0\.113)\.")   # 문서용 대역만
         self.assertTrue(any(p["blocked"] for p in geo["points"]), "차단 목적지가 지도에 없음")
+        # 알림 → 지도 점 연결: 알림의 dest 가 점의 ip 이고, 그 점에 last_alert 가 붙는다
+        ips = {p["ip"] for p in geo["points"]}
+        for p in geo["points"]:
+            self.assertIn("last_alert", p)
+        hit = [p for p in geo["points"] if p["last_alert"]]
+        self.assertTrue(hit, "last_alert 가 붙은 점이 없음")
+        for p in hit:
+            self.assertTrue(any(a["dest"] == p["ip"] and a["ts"] == p["last_alert"]["ts"] for a in snap["alerts"]), p)
+        self.assertTrue(any(a.get("dest") in ips for a in snap["alerts"]))
 
     def test_snapshot_has_chart_data(self):
         snap = json.loads(self.get("api/snapshot")[2])

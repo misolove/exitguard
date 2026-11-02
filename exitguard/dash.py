@@ -317,10 +317,11 @@ class DemoModel(Model):
     GEO = {"198.51.100.10": (35.68, 139.69, "Tokyo"), "198.51.100.20": (39.04, -77.49, "Ashburn"),
            "203.0.113.5": (50.11, 8.68, "Frankfurt"), "203.0.113.40": (1.35, 103.82, "Singapore"),
            "192.0.2.53": (37.57, 126.98, "Seoul"), "203.0.113.66": (-23.55, -46.63, "São Paulo")}
-    ALERT_SAMPLES = [("LOW", "ids-alert", "ET INFO 의심 TLD 접속 (demo.example.zip)"),
-                     ("MEDIUM", "dns-dga", "NXDOMAIN 급증: 5분 내 72회"),
-                     ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송"),
-                     ("HIGH", "ids-alert", "ET MALWARE 알려진 C2 비컨 패턴 (데모)")]
+    # (등급, 종류, 제목, 목적지). 목적지는 지도 점과 같은 문서용 IP
+    ALERT_SAMPLES = [("LOW", "ids-alert", "ET INFO 의심 TLD 접속 (demo.example.zip)", "198.51.100.10"),
+                     ("MEDIUM", "dns-dga", "NXDOMAIN 급증: 5분 내 72회", "192.0.2.53"),
+                     ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송", "203.0.113.40"),
+                     ("HIGH", "ids-alert", "ET MALWARE 알려진 C2 비컨 패턴 (데모)", "203.0.113.66")]
 
     def __init__(self):
         super().__init__()
@@ -335,10 +336,10 @@ class DemoModel(Model):
         self.totals = {ip: 0 for ip in self.CLIENTS}
         self.t0 = time.time()
         now = time.time()
-        for i, (lv, kind, title) in enumerate(self.ALERT_SAMPLES):
+        for i, (lv, kind, title, dest) in enumerate(self.ALERT_SAMPLES):
             ts = datetime.fromtimestamp(now - (len(self.ALERT_SAMPLES) - i) * 900).isoformat(timespec="seconds")
             self.alerts.append({"ts": ts, "level": lv, "kind": kind, "title": title, "client": list(self.CLIENTS)[i % 3],
-                                "action": "목적지 24h 차단" if lv == "HIGH" else None})
+                                "dest": dest, "action": "목적지 24h 차단" if lv == "HIGH" else None})
         self.nft["blocked"] = {"203.0.113.66": {}}
 
     def read_slow(self):
@@ -359,9 +360,10 @@ class DemoModel(Model):
 
     def read_alerts(self):
         if self.rnd.random() < 0.03:
-            lv, kind, title = self.rnd.choice(self.ALERT_SAMPLES[:3])
+            lv, kind, title, dest = self.rnd.choice(self.ALERT_SAMPLES[:3])
             self.alerts.append({"ts": datetime.now().isoformat(timespec="seconds"), "level": lv, "kind": kind,
-                                "title": title, "client": self.rnd.choice(list(self.CLIENTS)), "action": None})
+                                "title": title, "client": self.rnd.choice(list(self.CLIENTS)), "dest": dest,
+                                "action": None})
             self.alerts = self.alerts[-500:]
 
     def read_eve(self):
@@ -740,6 +742,26 @@ def alert_groups(m, since, n=20):
     return out[:n]
 
 
+def geo_with_alerts(m, since):
+    """지도 점마다 그 목적지의 가장 최근 알림(last_alert)을 붙인다. 새 알림이 오면 화면이 그 점을 반짝일 수 있게."""
+    geo = m.geo()
+    last = {}
+    for a in m.alerts:
+        d = a.get("dest")
+        if not d or a.get("level") == "INFO":
+            continue
+        try:
+            if datetime.fromisoformat(a["ts"]).timestamp() <= since:
+                continue
+        except Exception:
+            continue
+        if d not in last or a["ts"] >= last[d]["ts"]:
+            last[d] = {"ts": a["ts"], "level": a.get("level"), "title": a.get("title")}
+    for p in geo["points"]:
+        p["last_alert"] = last.get(p["ip"])
+    return geo
+
+
 def snapshot(m):
     """Model 상태를 JSON 직렬화 가능한 dict 로. 웹 대시보드 /api/snapshot 응답."""
     now = time.time(); day = now - 86400
@@ -771,12 +793,13 @@ def snapshot(m):
         "top_dests": [{"dest": k, "bytes": b, "bytes_h": human(b).strip(), "client": c, "client_name": m.name(c)}
                       for k, b, c in m.top_dests(n=10)],
         "alerts": [{"ts": a.get("ts"), "level": a.get("level"), "kind": a.get("kind"), "title": a.get("title"),
-                    "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "action": a.get("action")}
+                    "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "dest": a.get("dest"),
+                    "action": a.get("action")}
                    for a in [a for a in m.alerts if a.get("level") != "INFO"][-30:][::-1]],
         "alert_groups": alert_groups(m, day),
         "series": m.series(),
         "protos": m.protos(),
-        "geo": m.geo(),
+        "geo": geo_with_alerts(m, day),
         "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
                     "client_name": m.name(c), "label": label}
                    for ts, c, label in m.recent_dests(30)],
