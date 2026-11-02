@@ -1,0 +1,77 @@
+#!/bin/bash
+# ExitGuard 관리 CLI
+set -u
+CFG=/etc/exitguard/config.json
+LOGD=$(jq -r .log_dir $CFG 2>/dev/null || echo /var/log/exitguard)
+LIB=/usr/local/lib/exitguard
+need_root() { [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"; }
+
+fam() { [[ "$1" == *:* ]] && echo 6 || echo 4; }
+
+usage() {
+cat <<USAGE
+exitguardctl <command>
+
+  dash                       실시간 대시보드 (= exitguard-top, sudo 로 실행 시 차단/격리 가능)
+  status                     서비스/exit node/차단 현황
+  clients                    클라이언트별 실시간 패킷/바이트 (nft 카운터)
+  alerts [N]                 최근 알림 N줄 (기본 30)
+  watch                      알림 실시간 보기
+  analyze [host...]          기기별 심층 분석 (목적지/TLS/HTTP/DNS/비코닝/이상)
+  report [days] [--notify]   리포트 생성 (기본 1일)
+  block <ip> [hours]         외부 목적지 수동 차단 (기본 24h)
+  unblock <ip>               차단 해제
+  quarantine <client-ip> [h] 클라이언트 격리 (기본 1h)
+  release <client-ip>        격리 해제
+  list                       차단/격리 목록
+  capture <client-ip> [sec]  해당 클라이언트 트래픽 pcap 캡처 (기본 60초)
+  top [sec]                  최근 N초 eve.json 기준 목적지 TOP (기본 60)
+  rules-update               Suricata 룰 갱신 + 리로드
+  logs                       watcher 서비스 로그
+USAGE
+}
+
+cmd=${1:-status}; shift || true
+case "$cmd" in
+  status)
+    need_root "$cmd" "$@"
+    echo "== 서비스"; for s in tailscaled suricata exitguard-watch exitguard-report.timer exitguard-rules.timer; do printf "  %-24s %s\n" $s "$(systemctl is-active $s)"; done
+    echo "== exit node"; tailscale debug prefs 2>/dev/null | grep -E 'AdvertiseRoutes' | tr -d '\n'; echo
+    sysctl -n net.ipv4.ip_forward | sed 's/^/  ip_forward=/'
+    echo "== nft"; nft list set inet exitguard blocked4 2>/dev/null | grep -c 'timeout' | sed 's/^/  blocked4 elements: /'
+    nft list set inet exitguard quarantine4 2>/dev/null | grep -c 'timeout' | sed 's/^/  quarantine4 elements: /'
+    echo "== 최근 알림"; tail -5 $LOGD/alerts.log 2>/dev/null ;;
+  clients)
+    need_root "$cmd" "$@"
+    echo "클라이언트 (최근 2시간 활동, 누적 패킷/바이트)"
+    nft -j list set inet exitguard clients4 2>/dev/null | jq -r '.nftables[]|select(.set)|.set.elem[]? | "\(.elem.val)\t\(.elem.counter.packets) pkts\t\(.elem.counter.bytes) bytes"' | column -t
+    tailscale status | awk '{print $1, $2}' | sed 's/^/  ts: /' ;;
+  alerts) tail -n "${1:-30}" $LOGD/alerts.log ;;
+  watch) tail -F $LOGD/alerts.log ;;
+  dash|top-ui) exec python3 $LIB/dash.py "$@" ;;
+  analyze) PYTHONPATH=$LIB python3 -I $LIB/analyze.py "$@" ;;
+  report) need_root "$cmd" "$@"; PYTHONPATH=$LIB python3 $LIB/report.py "$@" ;;
+  block)
+    need_root "$cmd" "$@"; ip=$1; h=${2:-24}
+    nft add element inet exitguard blocked$(fam $ip) "{ $ip timeout $((h*3600))s }" && echo "blocked $ip for ${h}h" ;;
+  unblock) need_root "$cmd" "$@"; ip=$1; nft delete element inet exitguard blocked$(fam $ip) "{ $ip }" && echo "unblocked $ip" ;;
+  quarantine)
+    need_root "$cmd" "$@"; ip=$1; h=${2:-1}
+    nft add element inet exitguard quarantine$(fam $ip) "{ $ip timeout $((h*3600))s }" && echo "quarantined $ip for ${h}h" ;;
+  release) need_root "$cmd" "$@"; ip=$1; nft delete element inet exitguard quarantine$(fam $ip) "{ $ip }" && echo "released $ip" ;;
+  list) need_root "$cmd" "$@"; for s in blocked4 blocked6 quarantine4 quarantine6; do echo "== $s"; nft list set inet exitguard $s | sed -n '/elements/,/}/p'; done ;;
+  capture)
+    need_root "$cmd" "$@"; ip=$1; sec=${2:-60}; mkdir -p $LOGD/pcap
+    out=$LOGD/pcap/$(echo $ip | tr ':' '_')-$(date +%Y%m%d-%H%M%S).pcap
+    echo "capturing $ip on tailscale0 for ${sec}s -> $out"
+    timeout "$sec" tcpdump -i tailscale0 -nn -w "$out" host "$ip"; echo "done: $out" ;;
+  top)
+    need_root "$cmd" "$@"; sec=${1:-60}
+    since=$(date -d "-${sec} sec" +%Y-%m-%dT%H:%M:%S)  # eve.json 타임스탬프는 로컬시간(+0900)
+    echo "최근 ${sec}초 flow 기준 (client -> dest:port, bytes)"
+    jq -r --arg s "$since" 'select(.event_type=="flow" and .timestamp>=$s) | select(.flow.reason!="shutdown") | "\(.src_ip)\t\(.dest_ip):\(.dest_port)/\(.proto)\t\((.flow.bytes_toserver+.flow.bytes_toclient))"' /var/log/suricata/eve.json 2>/dev/null \
+      | awk -F'\t' '{b[$1"\t"$2]+=$3} END{for(k in b) print b[k]"\t"k}' | sort -rn | head -30 | column -t ;;
+  rules-update) need_root "$cmd" "$@"; /usr/local/lib/exitguard/rules-update.sh ;;
+  logs) journalctl -u exitguard-watch -n "${1:-50}" --no-pager ;;
+  *) usage ;;
+esac

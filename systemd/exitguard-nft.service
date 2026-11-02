@@ -1,0 +1,13 @@
+[Unit]
+Description=ExitGuard nftables table (load at boot)
+Before=network-pre.target exitguard-watch.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'nft -f /etc/exitguard/nftables-exitguard.conf || nft -f /etc/exitguard/nftables-exitguard-min.conf'
+ExecStop=/usr/sbin/nft delete table inet exitguard
+
+[Install]
+WantedBy=multi-user.target

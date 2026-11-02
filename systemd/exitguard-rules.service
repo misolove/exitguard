@@ -1,0 +1,6 @@
+[Unit]
+Description=ExitGuard Suricata ruleset update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/exitguard/rules-update.sh

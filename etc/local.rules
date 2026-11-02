@@ -1,0 +1,30 @@
+# ExitGuard 자체 룰 (sid 9000000~). ET Open 룰과 함께 로드됨.
+# classtype 은 /etc/suricata/classification.config 의 표준 분류 사용.
+
+# --- 의심 포트로의 아웃바운드 ---
+alert tcp $HOME_NET any -> $EXTERNAL_NET 4444 (msg:"EXITGUARD Outbound to 4444 (Metasploit default)"; flow:to_server,established; classtype:trojan-activity; sid:9000001; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 23 (msg:"EXITGUARD Outbound Telnet"; flow:to_server; flags:S; classtype:policy-violation; sid:9000002; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 445 (msg:"EXITGUARD Outbound SMB to Internet"; flow:to_server; flags:S; classtype:policy-violation; sid:9000003; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 3389 (msg:"EXITGUARD Outbound RDP to Internet"; flow:to_server; flags:S; classtype:policy-violation; sid:9000004; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 6667:6669 (msg:"EXITGUARD Outbound IRC (possible botnet C2)"; flow:to_server; flags:S; classtype:trojan-activity; sid:9000005; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET [3333,5555,7777,14444,45560] (msg:"EXITGUARD Outbound to common crypto-mining stratum ports"; flow:to_server; flags:S; classtype:coin-mining; sid:9000006; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 1433 (msg:"EXITGUARD Outbound MSSQL to Internet"; flow:to_server; flags:S; classtype:policy-violation; sid:9000007; rev:1;)
+
+# --- 채굴 프로토콜 (Stratum JSON-RPC) ---
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"EXITGUARD Stratum mining.subscribe detected"; flow:to_server,established; content:"mining.subscribe"; nocase; classtype:coin-mining; sid:9000010; rev:1;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"EXITGUARD XMRig/Monero login detected"; flow:to_server,established; content:"\"method\""; content:"\"login\""; distance:0; content:"\"agent\""; distance:0; classtype:coin-mining; sid:9000011; rev:1;)
+
+# --- 평문 자격증명 유출 ---
+alert tcp $HOME_NET any -> $EXTERNAL_NET 21 (msg:"EXITGUARD Plaintext FTP password to Internet"; flow:to_server,established; content:"PASS "; nocase; depth:5; classtype:policy-violation; sid:9000020; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"EXITGUARD HTTP Basic Auth over plaintext"; flow:to_server,established; http.header; content:"Authorization|3a 20|Basic "; classtype:policy-violation; sid:9000021; rev:1;)
+
+# --- 비표준 포트 DNS / DoH 우회 ---
+alert dns $HOME_NET any -> $EXTERNAL_NET !53 (msg:"EXITGUARD DNS on non-standard port"; classtype:policy-violation; sid:9000030; rev:1;)
+alert udp $HOME_NET any -> $EXTERNAL_NET 53 (msg:"EXITGUARD Oversized DNS query (possible tunneling)"; dsize:>512; classtype:policy-violation; sid:9000031; rev:1;)
+
+
+# --- 외부에서 클라이언트로의 비정상 유입 (exit node 가 NAT 이므로 드묾) ---
+alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"EXITGUARD Unsolicited inbound SYN to tailnet client"; flags:S,CE; flow:to_server; classtype:attempted-recon; sid:9000050; rev:1;)
+
+# --- 대용량 ICMP (터널링/exfil) ---
+alert icmp $HOME_NET any -> $EXTERNAL_NET any (msg:"EXITGUARD Large ICMP payload (possible tunneling)"; dsize:>1000; classtype:policy-violation; sid:9000060; rev:1;)

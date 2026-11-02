@@ -1,0 +1,17 @@
+[Unit]
+Description=ExitGuard - Tailscale exit node traffic watcher (detect/report/block)
+After=network-online.target suricata.service tailscaled.service
+Wants=suricata.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/usr/local/lib/exitguard
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/sh -c 'nft list table inet exitguard >/dev/null 2>&1 || nft -f /etc/exitguard/nftables-exitguard.conf || nft -f /etc/exitguard/nftables-exitguard-min.conf'
+ExecStart=/usr/bin/python3 /usr/local/lib/exitguard/watch.py
+Restart=always
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

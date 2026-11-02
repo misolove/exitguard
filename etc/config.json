@@ -1,0 +1,147 @@
+{
+  "_comment": "ExitGuard 설정. 변경 후: sudo systemctl restart exitguard-watch",
+  "interface": "tailscale0",
+  "eve_log": "/var/log/suricata/eve.json",
+  "state_dir": "/var/lib/exitguard",
+  "log_dir": "/var/log/exitguard",
+  "home_nets": [
+    "100.64.0.0/10",
+    "fd7a:115c:a1e0::/48"
+  ],
+  "never_block": [
+    "100.64.0.0/10",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "fd00::/8",
+    "fe80::/10",
+    "8.8.8.8",
+    "8.8.4.4",
+    "1.1.1.1",
+    "1.0.0.1"
+  ],
+  "block": {
+    "enabled": true,
+    "dest_block_hours": 24,
+    "block_on_severity": [
+      1
+    ],
+    "block_categories": [
+      "A Network Trojan was detected",
+      "Malware Command and Control Activity Detected",
+      "Domain Observed Used for C2 Detected",
+      "Exploit Kit Activity Detected",
+      "Crypto Currency Mining Activity Detected",
+      "Attempted Administrator Privilege Gain",
+      "Successful Administrator Privilege Gain",
+      "Attempted User Privilege Gain",
+      "Web Application Attack",
+      "Targeted Malicious Activity was Detected",
+      "Possibly Unwanted Program Detected",
+      "Exploit Attempt"
+    ],
+    "ignore_categories": [
+      "Generic Protocol Command Decode",
+      "Not Suspicious Traffic",
+      "Unknown Traffic"
+    ],
+    "category_levels": {
+      "Potential Corporate Privacy Violation": "MEDIUM",
+      "Potentially Bad Traffic": "MEDIUM",
+      "Misc Attack": "MEDIUM",
+      "Misc activity": "LOW",
+      "Detection of a Network Scan": "MEDIUM",
+      "Attempted Information Leak": "MEDIUM"
+    },
+    "_comment_levels": "severity 기반 등급(1=HIGH,2=MEDIUM,3=LOW)을 카테고리별로 덮어씀. 격리 카운트는 block_categories 에 속한 HIGH 알림만 집계.",
+    "signature_levels": {
+      "ET INFO": "LOW",
+      "ET USER_AGENTS": "LOW",
+      "ET HUNTING": "LOW",
+      "ET FILE_SHARING": "LOW",
+      "ET GAMES": "LOW",
+      "ET CHAT": "LOW",
+      "ET MOBILE_MALWARE": "HIGH",
+      "ET MALWARE": "HIGH",
+      "ET TROJAN": "HIGH",
+      "ET COINMINER": "HIGH",
+      "ET EXPLOIT": "HIGH"
+    },
+    "_comment_sig": "시그니처 이름 접두어로 등급 지정. category_levels 보다 우선. 차단/격리 여부는 여전히 severity+block_categories 로 결정."
+  },
+  "quarantine": {
+    "enabled": true,
+    "high_alerts": 5,
+    "window_sec": 600,
+    "hours": 1
+  },
+  "scan": {
+    "vertical_ports": 25,
+    "horizontal_hosts": 100,
+    "window_sec": 60,
+    "block_scanned_dest": false,
+    "horizontal_exclude_ports": [
+      80,
+      443,
+      53,
+      123,
+      853
+    ],
+    "_comment": "horizontal(한 포트→다수 호스트)은 웹/DNS/NTP 포트 제외. 브라우징만으로도 60초에 100개 호스트는 흔함."
+  },
+  "dns": {
+    "nxdomain_per_5min": 60,
+    "long_label_len": 60,
+    "tunnel_queries_per_5min": 30,
+    "suspicious_tlds": [
+      ".zip",
+      ".mov",
+      ".top",
+      ".xyz",
+      ".tk",
+      ".ml",
+      ".ga",
+      ".cf",
+      ".gq",
+      ".onion",
+      ".bit"
+    ],
+    "blocklist_domains": []
+  },
+  "bandwidth": {
+    "gb_per_hour_warn": 5
+  },
+  "suspicious_ports": {
+    "tcp": [
+      23,
+      445,
+      1433,
+      3389,
+      4444,
+      5900,
+      6667,
+      3333,
+      5555,
+      7777,
+      14444,
+      45560
+    ],
+    "udp": [
+      69,
+      1900,
+      11211
+    ]
+  },
+  "notify": {
+    "min_level": "MEDIUM",
+    "dedupe_sec": 600,
+    "desktop": true,
+    "desktop_user": "",
+    "webhook_url": "",
+    "telegram": {
+      "bot_token": "",
+      "chat_id": ""
+    }
+  }
+}

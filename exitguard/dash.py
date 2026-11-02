@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+"""ExitGuard 터미널 대시보드 (curses). 원격 SSH 에서 한 화면으로 상태 파악.
+사용: exitguard-top            (일반 사용자: 조회만 / root: 차단·격리 조치 가능)
+      exitguard-top --text     (curses 없이 스냅샷 한 번 출력)
+"""
+import collections, curses, ipaddress, json, os, subprocess, sys, time, unicodedata
+from datetime import datetime
+
+CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
+EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
+ALERTS = "/var/log/exitguard/alerts.jsonl"
+HOME = [ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48")]
+IS_ROOT = os.geteuid() == 0
+
+
+def is_home(ip):
+    try:
+        a = ipaddress.ip_address(ip)
+    except Exception:
+        return False
+    return any(a in n for n in HOME)
+
+
+def human(n, suffix=""):
+    n = float(n)
+    for u in ("B", "K", "M", "G", "T"):
+        if n < 1000:
+            return f"{n:5.1f}{u}{suffix}" if u != "B" else f"{int(n):5d}{u}{suffix}"
+        n /= 1024
+    return f"{n:5.1f}P{suffix}"
+
+
+def wcwidth(s):
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in s)
+
+
+def fit(s, w, right=False):
+    """표시 폭 w 에 맞춰 자르고 패딩 (한글 2칸)."""
+    out, cur = "", 0
+    for ch in s:
+        cw = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        if cur + cw > w:
+            break
+        out += ch; cur += cw
+    pad = " " * (w - cur)
+    return pad + out if right else out + pad
+
+
+def norm_ip(ip):
+    try:
+        return ipaddress.ip_address(ip).compressed
+    except Exception:
+        return ip
+
+
+def ago(ts):
+    d = int(time.time() - ts)
+    return f"{d}s" if d < 60 else f"{d//60}m" if d < 3600 else f"{d//3600}h"
+
+
+def run(cmd, timeout=5):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
+
+
+class Model:
+    def __init__(self):
+        self.f = None; self.inode = None
+        self.stats = {}
+        self.flows = collections.deque(maxlen=20000)     # (ts, client, dst, port, proto, bytes)
+        self.dests = collections.deque(maxlen=400)       # (ts, client, label)
+        self.last_seen = {}                              # client -> ts
+        self.alerts = []; self.alerts_pos = 0
+        self.names = {}; self.ts_self = {}; self.ts_peers = {}; self.self_ips = set()
+        self.services = {}
+        self.nft = {"clients": {}, "blocked": {}, "quar": {}}
+        self.rates = {}                                   # client -> (bytes/s) from nft deltas
+        self._prev_nft = {}; self._prev_t = 0
+        self.slow_t = 0
+        self.msg = ""
+
+    # ---- eve.json 증분 읽기
+    def _open(self):
+        if not os.path.exists(EVE):
+            return False
+        self.f = open(EVE, "rb")   # 바이너리: 반복 중에도 tell/seek 가능
+        self.inode = os.fstat(self.f.fileno()).st_ino
+        size = os.path.getsize(EVE)
+        self.f.seek(max(0, size - 4 * 1024 * 1024))
+        if size > 4 * 1024 * 1024:
+            self.f.readline()
+        return True
+
+    def read_eve(self):
+        if self.f is None and not self._open():
+            return
+        try:
+            st = os.stat(EVE)
+            if st.st_ino != self.inode or st.st_size < self.f.tell():
+                self.f.close(); self.f = None
+                return
+        except FileNotFoundError:
+            return
+        now = time.time()
+        while True:
+            pos = self.f.tell()
+            raw = self.f.readline()
+            if not raw:
+                break
+            if not raw.endswith(b"\n"):      # Suricata 가 쓰는 중인 부분 줄: 다음 턴에 다시 읽음
+                self.f.seek(pos)
+                break
+            try:
+                ev = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            t = ev.get("event_type")
+            try:
+                ts = datetime.fromisoformat(ev["timestamp"]).timestamp()
+            except Exception:
+                ts = now
+            if t == "stats":
+                self.stats = ev.get("stats", {}); continue
+            src, dst = norm_ip(ev.get("src_ip", "")), norm_ip(ev.get("dest_ip", ""))
+            if src in self.self_ips or dst in self.self_ips:
+                continue
+            if is_home(src) and not is_home(dst):
+                client, ext, port = src, dst, ev.get("dest_port")
+            elif is_home(dst) and not is_home(src):
+                client, ext, port = dst, src, ev.get("src_port")
+            else:
+                continue
+            self.last_seen[client] = max(self.last_seen.get(client, 0), ts)
+            if t == "flow":
+                fl = ev.get("flow", {})
+                if fl.get("reason") == "shutdown":   # Suricata 재시작 플러시는 실시간 통계에서 제외
+                    continue
+                b = fl.get("bytes_toserver", 0) + fl.get("bytes_toclient", 0)
+                self.flows.append((ts, client, ext, port, (ev.get("proto") or "").lower(), b, ev.get("app_proto") or ""))
+            elif t in ("tls", "quic"):
+                sni = (ev.get("tls") or ev.get("quic") or {}).get("sni")
+                if sni:
+                    self.dests.append((ts, client, f"{sni} [{t}]"))
+            elif t == "http":
+                h = ev.get("http", {})
+                self.dests.append((ts, client, f"{h.get('hostname','?')}{(h.get('url') or '')[:30]} [http]"))
+            elif t == "dns":
+                d = ev.get("dns", {})
+                if d.get("type") in ("query", "request"):
+                    name = d.get("rrname") or ((d.get("queries") or [{}])[0].get("rrname"))
+                    if name:
+                        self.dests.append((ts, client, f"{name} [dns]"))
+
+    def read_alerts(self):
+        if not os.path.exists(ALERTS):
+            return
+        try:
+            size = os.path.getsize(ALERTS)
+            if size < self.alerts_pos:
+                self.alerts_pos = 0; self.alerts = []
+            with open(ALERTS) as f:
+                f.seek(self.alerts_pos)
+                for line in f:
+                    try:
+                        self.alerts.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+                self.alerts_pos = f.tell()
+            self.alerts = self.alerts[-500:]
+        except Exception:
+            pass
+
+    def read_slow(self):
+        if time.time() - self.slow_t < 10:
+            return
+        self.slow_t = time.time()
+        out = run(["tailscale", "status", "--json"], 10)
+        try:
+            st = json.loads(out)
+            self.ts_self = st.get("Self", {})
+            self.ts_peers = st.get("Peer", {})
+            self.self_ips = set(self.ts_self.get("TailscaleIPs") or [])
+            for p in list(self.ts_peers.values()) + [self.ts_self]:
+                for ip in p.get("TailscaleIPs", []) or []:
+                    self.names[ip] = p.get("HostName", "")
+        except Exception:
+            pass
+        for s in ("suricata", "exitguard-watch", "exitguard-nft", "tailscaled"):
+            self.services[s] = run(["systemctl", "is-active", s]).strip() or "?"
+
+    def read_nft(self):
+        if not IS_ROOT:
+            return
+        res = {"clients": {}, "blocked": {}, "quar": {}}
+        for key, sets in (("clients", ("clients4", "clients6")), ("blocked", ("blocked4", "blocked6")), ("quar", ("quarantine4", "quarantine6"))):
+            for s in sets:
+                out = run(["nft", "-j", "list", "set", "inet", "exitguard", s])
+                try:
+                    for obj in json.loads(out).get("nftables", []):
+                        for el in (obj.get("set") or {}).get("elem") or []:
+                            if isinstance(el, dict):
+                                e = el["elem"]; res[key][str(e["val"])] = e
+                            else:
+                                res[key][str(el)] = {}
+                except Exception:
+                    pass
+        now = time.time()
+        if self._prev_t:
+            dt = max(now - self._prev_t, 0.5)
+            for ip, e in res["clients"].items():
+                b = (e.get("counter") or {}).get("bytes", 0)
+                pb = (self._prev_nft.get(ip, {}).get("counter") or {}).get("bytes", b)
+                self.rates[ip] = max(0, b - pb) / dt
+        self._prev_nft = res["clients"]; self._prev_t = now
+        self.nft = res
+
+    def refresh(self):
+        self.read_slow(); self.read_eve(); self.read_alerts(); self.read_nft()
+
+    # ---- 집계
+    def name(self, ip):
+        n = self.names.get(ip)
+        return f"{n}" if n else ip
+
+    def clients(self, win=300):
+        now = time.time()
+        rows = {}
+        for ts, c, ext, port, proto, b, app in self.flows:
+            if now - ts > win:
+                continue
+            r = rows.setdefault(c, {"bytes": 0, "flows": 0, "dests": set()})
+            r["bytes"] += b; r["flows"] += 1; r["dests"].add(ext)
+        for c, ts in self.last_seen.items():
+            if now - ts <= win:
+                rows.setdefault(c, {"bytes": 0, "flows": 0, "dests": set()})
+        for ip in self.nft["clients"]:
+            rows.setdefault(ip, {"bytes": 0, "flows": 0, "dests": set()})
+        out = []
+        for c, r in rows.items():
+            a24 = sum(1 for a in self.alerts if a.get("client") == c and a.get("level") in ("MEDIUM", "HIGH", "CRITICAL"))
+            peer = next((p for p in self.ts_peers.values() if c in (p.get("TailscaleIPs") or [])), {})
+            link = "direct" if peer.get("CurAddr") else (f"relay:{peer.get('Relay')}" if peer.get("Relay") else "-")
+            cnt = (self.nft["clients"].get(c, {}).get("counter") or {})
+            out.append({"ip": c, "name": self.name(c), "bytes": r["bytes"], "flows": r["flows"], "ndest": len(r["dests"]),
+                        "alerts": a24, "seen": self.last_seen.get(c, 0), "link": link,
+                        "rate": self.rates.get(c), "total": cnt.get("bytes"), "quar": c in self.nft["quar"]})
+        out.sort(key=lambda x: -(x["rate"] or 0) * 1e9 - x["bytes"])
+        return out
+
+    def top_dests(self, win=120, n=15):
+        now = time.time(); agg = collections.Counter(); who = {}
+        for ts, c, ext, port, proto, b, app in self.flows:
+            if now - ts > win:
+                continue
+            k = f"{ext}:{port}/{proto}" + (f" {app}" if app else "")
+            agg[k] += b; who[k] = c
+        return [(k, b, who[k]) for k, b in agg.most_common(n)]
+
+    def recent_dests(self, n=30):
+        return list(self.dests)[-n:][::-1]
+
+
+# ---------------------------------------------------------------- render
+LEVEL_COLOR = {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 3}
+
+
+class UI:
+    def __init__(self, scr, m):
+        self.scr, self.m = scr, m
+        self.interval = 2.0
+        curses.curs_set(0); curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_RED, -1); curses.init_pair(2, curses.COLOR_YELLOW, -1)
+        curses.init_pair(3, curses.COLOR_CYAN, -1); curses.init_pair(4, curses.COLOR_GREEN, -1)
+        curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLUE); curses.init_pair(6, curses.COLOR_MAGENTA, -1)
+        self.scr.nodelay(True)
+
+    def put(self, y, x, s, attr=0, maxw=None):
+        h, w = self.scr.getmaxyx()
+        if y >= h or x >= w:
+            return
+        maxw = w - x if maxw is None else min(maxw, w - x)
+        try:
+            self.scr.addnstr(y, x, s, max(0, maxw - 1 if y == h - 1 else maxw), attr)
+        except curses.error:
+            pass
+
+    def box(self, y, x, h, w, title):
+        try:
+            win = self.scr.derwin(h, w, y, x); win.box()
+        except curses.error:
+            return
+        self.put(y, x + 2, f" {title} ", curses.A_BOLD)
+
+    def draw(self):
+        m = self.m; scr = self.scr; scr.erase()
+        H, W = scr.getmaxyx()
+        # 헤더
+        approved = m.ts_self.get("ExitNodeOption")
+        adv = "승인됨" if approved else "미승인/미광고"
+        hdr = f" ExitGuard  {m.ts_self.get('HostName', os.uname().nodename)}  exit node: {adv}  {datetime.now():%m-%d %H:%M:%S}  refresh {self.interval:.0f}s "
+        self.put(0, 0, hdr.ljust(W), curses.color_pair(5) | curses.A_BOLD)
+        # 상태줄
+        x = 1
+        for s, short in (("suricata", "IDS"), ("exitguard-watch", "WATCH"), ("exitguard-nft", "NFT"), ("tailscaled", "TS")):
+            st = m.services.get(s, "?"); ok = st == "active"
+            self.put(1, x, ("● " if ok else "✖ ") + short, curses.color_pair(4 if ok else 1) | curses.A_BOLD); x += len(short) + 4
+        cap = m.stats.get("capture", {}); pk = cap.get("kernel_packets", 0); dr = cap.get("kernel_drops", 0)
+        pct = (dr / pk * 100) if pk else 0
+        self.put(1, x, f"│ 캡처 {pk:,} pkt  드롭 {dr:,} ({pct:.2f}%)  업타임 {m.stats.get('uptime', 0)//60}m", curses.color_pair(1 if pct > 1 else 0)); x += 48
+        day = time.time() - 86400
+        cnt = collections.Counter(a["level"] for a in m.alerts if datetime.fromisoformat(a["ts"]).timestamp() > day)
+        s = f"│ 24h 알림  C{cnt['CRITICAL']} H{cnt['HIGH']} M{cnt['MEDIUM']} L{cnt['LOW']}"
+        self.put(1, x, s, curses.color_pair(1 if cnt["CRITICAL"] + cnt["HIGH"] else 2 if cnt["MEDIUM"] else 0) | curses.A_BOLD)
+        nb, nq = len(m.nft["blocked"]), len(m.nft["quar"])
+        self.put(1, x + len(s) + 2, f"│ 차단 {nb}  격리 {nq}" if IS_ROOT else "│ 차단/격리: root 필요", curses.color_pair(1 if nq else 0))
+
+        wide = W >= 130
+        top = 2
+        body_h = H - top - 1
+        if wide:
+            lw = W * 55 // 100; rw = W - lw
+            ch = max(6, body_h * 45 // 100)
+            self.panel_clients(top, 0, ch, lw)
+            self.panel_dests(top + ch, 0, body_h - ch, lw)
+            ah = max(6, body_h * 55 // 100)
+            self.panel_alerts(top, lw, ah, rw)
+            self.panel_recent(top + ah, lw, body_h - ah, rw)
+        else:
+            ch = min(max(5, len(m.clients()) + 3), body_h // 3)
+            self.panel_clients(top, 0, ch, W)
+            ah = max(5, (body_h - ch) // 2)
+            self.panel_alerts(top + ch, 0, ah, W)
+            self.panel_recent(top + ch + ah, 0, body_h - ch - ah, W)
+        foot = " q 종료  +/- 주기  " + ("b 차단  u 해제  Q 격리  R 격리해제  c pcap " if IS_ROOT else "(조치하려면 sudo 로 실행) ") + (f" {m.msg}" if m.msg else "")
+        self.put(H - 1, 0, foot.ljust(W - 1), curses.A_REVERSE)
+        scr.refresh()
+
+    def panel_clients(self, y, x, h, w):
+        m = self.m
+        self.box(y, x, h, w, "클라이언트 (최근 5분)")
+        rate_hdr = "속도/s " if IS_ROOT else "5분량 "
+        hdr = fit("기기", 22) + fit("IP", 16) + fit(rate_hdr, 8, True) + fit("플로우", 7, True) + fit("목적지", 7, True) + fit("알림", 5, True) + "  " + fit("링크", 10) + fit("마지막", 6, True)
+        self.put(y + 1, x + 1, hdr, curses.A_UNDERLINE, w - 2)
+        rows = m.clients()
+        if not rows:
+            self.put(y + 2, x + 2, "아직 이 exit node 를 지나는 트래픽이 없습니다.", curses.color_pair(3), w - 3)
+        for i, r in enumerate(rows[: h - 3]):
+            rate = human(r["rate"]) if r["rate"] is not None else human(r["bytes"])
+            flag = " ⛔" if r["quar"] else ""
+            attr = curses.color_pair(1) | curses.A_BOLD if r["quar"] else (curses.color_pair(2) if r["alerts"] else 0)
+            line = fit(r['name'] + flag, 22) + fit(r['ip'], 16) + f"{rate:>8}{r['flows']:>7}{r['ndest']:>7}{r['alerts']:>5}  " + fit(r['link'], 10) + fit(ago(r['seen']) if r['seen'] else '-', 6, True)
+            self.put(y + 2 + i, x + 1, line, attr, w - 2)
+
+    def panel_dests(self, y, x, h, w):
+        m = self.m
+        self.box(y, x, h, w, "상위 목적지 (최근 2분, 바이트)")
+        for i, (k, b, c) in enumerate(m.top_dests(n=h - 2)):
+            self.put(y + 1 + i, x + 1, f"{human(b):>8}  {k:<40} ← " + m.name(c), 0, w - 2)
+
+    def panel_alerts(self, y, x, h, w):
+        m = self.m
+        self.box(y, x, h, w, "알림 (최신순)")
+        rows = [a for a in m.alerts if a.get("level") != "INFO"][::-1][: h - 2]
+        if not rows:
+            self.put(y + 1, x + 2, "알림 없음", curses.color_pair(4), w - 3)
+        for i, a in enumerate(rows):
+            t = a["ts"][11:19]; lv = a["level"]
+            act = " ⛔" if a.get("action") and "실패" not in a["action"] else ""
+            line = f"{t} {lv[:4]:<4} " + fit(m.name(a.get('client') or '-'), 14) + f" {a['title'][:w - 40]}{act}"
+            self.put(y + 1 + i, x + 1, line, curses.color_pair(LEVEL_COLOR.get(lv, 0)) | (curses.A_BOLD if lv in ("HIGH", "CRITICAL") else 0), w - 2)
+
+    def panel_recent(self, y, x, h, w):
+        m = self.m
+        self.box(y, x, h, w, "실시간 접속지 (SNI / DNS / HTTP)")
+        for i, (ts, c, label) in enumerate(m.recent_dests(h - 2)):
+            self.put(y + 1 + i, x + 1, f"{datetime.fromtimestamp(ts):%H:%M:%S} " + fit(m.name(c), 14) + f" {label}", 0, w - 2)
+
+    def prompt(self, text):
+        H, W = self.scr.getmaxyx()
+        curses.echo(); curses.curs_set(1); self.scr.nodelay(False)
+        self.put(H - 1, 0, (" " + text).ljust(W - 1), curses.A_REVERSE); self.scr.refresh()
+        try:
+            s = self.scr.getstr(H - 1, len(text) + 2, 60).decode().strip()
+        except Exception:
+            s = ""
+        curses.noecho(); curses.curs_set(0); self.scr.nodelay(True)
+        return s
+
+    def action(self, key):
+        m = self.m
+        fam = lambda ip: "6" if ":" in ip else "4"
+        if key == "b":
+            ip = self.prompt("차단할 외부 IP [시간, 기본 24]:")
+            if ip:
+                p = ip.split(); hrs = int(p[1]) if len(p) > 1 else 24
+                r = subprocess.run(["nft", "add", "element", "inet", "exitguard", f"blocked{fam(p[0])}", f"{{ {p[0]} timeout {hrs*3600}s }}"], capture_output=True, text=True)
+                m.msg = f"차단 {p[0]} {hrs}h" if r.returncode == 0 else f"실패: {r.stderr.strip()[:50]}"
+        elif key == "u":
+            ip = self.prompt("차단 해제할 IP:")
+            if ip:
+                r = subprocess.run(["nft", "delete", "element", "inet", "exitguard", f"blocked{fam(ip)}", f"{{ {ip} }}"], capture_output=True, text=True)
+                m.msg = f"해제 {ip}" if r.returncode == 0 else f"실패: {r.stderr.strip()[:50]}"
+        elif key == "Q":
+            ip = self.prompt("격리할 클라이언트 IP [시간, 기본 1]:")
+            if ip:
+                p = ip.split(); hrs = int(p[1]) if len(p) > 1 else 1
+                r = subprocess.run(["nft", "add", "element", "inet", "exitguard", f"quarantine{fam(p[0])}", f"{{ {p[0]} timeout {hrs*3600}s }}"], capture_output=True, text=True)
+                m.msg = f"격리 {p[0]} {hrs}h" if r.returncode == 0 else f"실패: {r.stderr.strip()[:50]}"
+        elif key == "R":
+            ip = self.prompt("격리 해제할 클라이언트 IP:")
+            if ip:
+                r = subprocess.run(["nft", "delete", "element", "inet", "exitguard", f"quarantine{fam(ip)}", f"{{ {ip} }}"], capture_output=True, text=True)
+                m.msg = f"격리 해제 {ip}" if r.returncode == 0 else f"실패: {r.stderr.strip()[:50]}"
+        elif key == "c":
+            ip = self.prompt("pcap 캡처할 클라이언트 IP [초, 기본 60]:")
+            if ip:
+                p = ip.split(); sec = p[1] if len(p) > 1 else "60"
+                subprocess.Popen(["exitguardctl", "capture", p[0], sec], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                m.msg = f"{p[0]} 캡처 {sec}초 시작 → /var/log/exitguard/pcap/"
+
+    def loop(self):
+        last = 0
+        while True:
+            if time.time() - last >= self.interval:
+                self.m.refresh(); self.draw(); last = time.time()
+            try:
+                k = self.scr.getkey()
+            except curses.error:
+                time.sleep(0.1); continue
+            if k in ("q", "Q") and not (k == "Q" and IS_ROOT):
+                return
+            if k == "KEY_RESIZE":
+                self.draw()
+            elif k == "+":
+                self.interval = min(30, self.interval + 1); last = 0
+            elif k == "-":
+                self.interval = max(1, self.interval - 1); last = 0
+            elif k in ("b", "u", "Q", "R", "c") and IS_ROOT:
+                self.action(k); last = 0
+            elif k == "r":
+                last = 0
+
+
+def text_snapshot(m):
+    m.refresh(); time.sleep(0.2); m.refresh()
+    cap = m.stats.get("capture", {})
+    print(f"ExitGuard @ {datetime.now():%Y-%m-%d %H:%M:%S}  exit node: {'승인됨' if m.ts_self.get('ExitNodeOption') else '미승인'}")
+    print("서비스: " + "  ".join(f"{s}={st}" for s, st in m.services.items()))
+    print(f"캡처: {cap.get('kernel_packets', 0):,} pkt, 드롭 {cap.get('kernel_drops', 0):,}")
+    print("\n클라이언트 (최근 5분)")
+    for r in m.clients():
+        print(f"  {r['name']:<22}{r['ip']:<16}{human(r['bytes']):>8}  flows={r['flows']:<5} dests={r['ndest']:<4} alerts={r['alerts']:<3} {r['link']}")
+    print("\n상위 목적지 (2분)")
+    for k, b, c in m.top_dests(n=10):
+        print(f"  {human(b):>8}  {k:<40} ← {m.name(c)}")
+    print("\n최근 알림")
+    for a in m.alerts[-8:][::-1]:
+        print(f"  {a['ts'][11:19]} {a['level']:<8} {m.name(a.get('client') or '-'):<16} {a['title']}  {a.get('action') or ''}")
+    print("\n실시간 접속지")
+    for ts, c, label in m.recent_dests(10):
+        print(f"  {datetime.fromtimestamp(ts):%H:%M:%S} {m.name(c):<16} {label}")
+
+
+def main():
+    m = Model()
+    if "--text" in sys.argv:
+        text_snapshot(m); return
+    os.environ.setdefault("ESCDELAY", "25")
+    curses.wrapper(lambda scr: UI(scr, m).loop())
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:   # Ctrl+C 도 q 처럼 조용히 종료
+        pass

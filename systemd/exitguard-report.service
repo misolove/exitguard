@@ -1,0 +1,7 @@
+[Unit]
+Description=ExitGuard daily report
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/usr/local/lib/exitguard
+ExecStart=/usr/bin/python3 /usr/local/lib/exitguard/report.py 1 --notify
