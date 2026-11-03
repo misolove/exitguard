@@ -809,6 +809,11 @@ h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transfor
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
 .lv{font-size:11px;font-weight:700;padding:0 5px;border-radius:4px;border:1px solid currentColor}
 .empty{color:var(--mute);padding:6px 0}
+.chart{width:100%;height:auto;display:block}
+.eg-alert{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:10px 0}
+.eg-lv{font-size:10px;font-weight:700;color:#fff;border-radius:4px;padding:2px 5px;min-width:58px;text-align:center}
+.eg-body{flex:1;min-width:0}.eg-title{font-weight:600;overflow-wrap:anywhere}
+.eg-meta{font-size:12px;color:var(--mute);overflow-wrap:anywhere}.eg-count{font-weight:700}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 </style></head><body>
 <header><h1>ExitGuard<span id="demo" class="badge" hidden>DEMO</span></h1>
@@ -817,7 +822,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <section class="wide"><h2>목적지 지구본</h2><svg id="globe" viewBox="0 0 960 480" style="width:100%;display:block" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
 <section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
 <section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div></section>
-<section><h2>알림 (최신순)</h2><div id="alerts"></div></section>
+<section><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts"></div></section>
 <section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
 <section><h2>실시간 접속지 (SNI / DNS / HTTP)</h2><div id="recent"></div></section>
 </main>
@@ -875,14 +880,8 @@ function render(s){
     return d;
   }, "아직 이 exit node 를 지나는 트래픽이 없습니다.");
 
-  fill($("alerts"), s.alerts, x => {
-    const d = el("div","row");
-    const lv = el("span","lv " + (LV[x.level] || ""), x.level); d.append(lv);
-    d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
-    d.append(el("div","main", (x.title || "") + (x.action && !String(x.action).includes("실패") ? " ⛔" : "")));
-    if(x.action) d.append(el("span","k", x.action));
-    return d;
-  }, "알림 없음");
+  EGViz.levelBars($("bars"), s.alerts_24h);
+  EGViz.alertGroups($("alerts"), s.alert_groups);
 
   fill($("dests"), s.top_dests, x => {
     const d = el("div","row");
