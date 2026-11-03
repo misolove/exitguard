@@ -8,6 +8,7 @@
 """
 import collections, curses, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
+from urllib.parse import urlsplit
 
 CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
@@ -321,6 +322,7 @@ class DemoModel(Model):
                      ("MEDIUM", "dns-dga", "NXDOMAIN 급증: 5분 내 72회"),
                      ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송"),
                      ("HIGH", "ids-alert", "ET MALWARE 알려진 C2 비컨 패턴 (데모)")]
+    ALERT_DESTS = ("198.51.100.10", "192.0.2.53", "203.0.113.40", "203.0.113.66")
 
     def __init__(self):
         super().__init__()
@@ -338,6 +340,7 @@ class DemoModel(Model):
         for i, (lv, kind, title) in enumerate(self.ALERT_SAMPLES):
             ts = datetime.fromtimestamp(now - (len(self.ALERT_SAMPLES) - i) * 900).isoformat(timespec="seconds")
             self.alerts.append({"ts": ts, "level": lv, "kind": kind, "title": title, "client": list(self.CLIENTS)[i % 3],
+                                "dest": self.ALERT_DESTS[i],
                                 "action": "목적지 24h 차단" if lv == "HIGH" else None})
         self.nft["blocked"] = {"203.0.113.66": {}}
 
@@ -361,6 +364,7 @@ class DemoModel(Model):
         if self.rnd.random() < 0.03:
             lv, kind, title = self.rnd.choice(self.ALERT_SAMPLES[:3])
             self.alerts.append({"ts": datetime.now().isoformat(timespec="seconds"), "level": lv, "kind": kind,
+                                "dest": self.ALERT_DESTS[self.ALERT_SAMPLES.index((lv, kind, title))],
                                 "title": title, "client": self.rnd.choice(list(self.CLIENTS)), "action": None})
             self.alerts = self.alerts[-500:]
 
@@ -740,20 +744,49 @@ def alert_groups(m, since, n=20):
     return out[:n]
 
 
+def slack_status():
+    """Configuration metadata only; never expose webhook URLs or claim delivery."""
+    if DEMO:
+        return {"state": "demo", "min_level": "MEDIUM"}
+    try:
+        with open(CFG_PATH) as f:
+            notify = json.load(f).get("notify", {})
+        url = notify.get("webhook_url") or ""
+        parsed = urlsplit(url)
+        slack = (parsed.scheme == "https" and parsed.hostname in ("hooks.slack.com", "hooks.slack-gov.com")
+                 and parsed.path.startswith("/services/") and not parsed.username and not parsed.password)
+        level = notify.get("min_level", "MEDIUM")
+        return {"state": "configured" if slack else "other" if url else "missing",
+                "min_level": level if level in LEVEL_RANK else "UNKNOWN"}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"state": "unknown", "min_level": "UNKNOWN"}
+
+
 def snapshot(m):
     """Model 상태를 JSON 직렬화 가능한 dict 로. 웹 대시보드 /api/snapshot 응답."""
     now = time.time(); day = now - 86400
     cap = m.stats.get("capture", {}); pk = cap.get("kernel_packets", 0); dr = cap.get("kernel_drops", 0)
     cnt = collections.Counter()
+    latest = {}
     for a in m.alerts:
         try:
-            if datetime.fromisoformat(a["ts"]).timestamp() > day:
+            timestamp = datetime.fromisoformat(a["ts"]).timestamp()
+            if timestamp > day:
                 cnt[a.get("level")] += 1
+            dest = a.get("dest")
+            if dest and timestamp > latest.get(dest, (float("-inf"), None))[0]:
+                latest[dest] = (timestamp, a)
         except Exception:
             pass
+    geo = m.geo()
+    geo = {"home": geo.get("home"), "points": [dict(p) for p in geo.get("points", [])]}
+    for p in geo["points"]:
+        alert = latest.get(p["ip"], (None, None))[1]
+        p["last_alert"] = ({k: alert.get(k) for k in ("ts", "level", "title")} if alert else None)
     return {
         "generated": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
         "demo": DEMO,
+        "slack": slack_status(),
         "host": m.ts_self.get("HostName") or os.uname().nodename,
         "exit_node_approved": bool(m.ts_self.get("ExitNodeOption")),
         "services": dict(m.services),
@@ -762,6 +795,15 @@ def snapshot(m):
         "alerts_24h": {lv: cnt[lv] for lv in ("CRITICAL", "HIGH", "MEDIUM", "LOW")},
         "nft_visible": IS_ROOT or DEMO,
         "blocked": len(m.nft["blocked"]), "quarantined": len(m.nft["quar"]),
+        "destination_count": len({ext for ts, c, ext, port, proto, b, app in m.flows if now - ts <= 120}),
+        "attention_dests": [
+            {"ip": ip, "blocked": ip in m.nft["blocked"],
+             "city": next((p.get("city") for p in geo["points"] if p["ip"] == ip), None),
+             "host": next((p.get("host") for p in geo["points"] if p["ip"] == ip), None),
+             "last_alert": ({k: latest[ip][1].get(k) for k in ("ts", "level", "title")} if ip in latest else None)}
+            for ip in sorted(set(m.nft["blocked"]) | {ip for ip, (ts, a) in latest.items() if ts > day},
+                             key=lambda ip: (ip not in m.nft["blocked"],
+                                             LEVEL_RANK.get(latest.get(ip, (None, {}))[1].get("level"), 9)))],
         "clients": [{"name": r["name"], "ip": r["ip"], "bytes_5m": r["bytes"], "rate": r["rate"],
                      "rate_h": human(r["rate"]).strip() + "/s" if r["rate"] is not None else None,
                      "bytes_5m_h": human(r["bytes"]).strip(), "flows": r["flows"], "dests": r["ndest"],
@@ -771,12 +813,13 @@ def snapshot(m):
         "top_dests": [{"dest": k, "bytes": b, "bytes_h": human(b).strip(), "client": c, "client_name": m.name(c)}
                       for k, b, c in m.top_dests(n=10)],
         "alerts": [{"ts": a.get("ts"), "level": a.get("level"), "kind": a.get("kind"), "title": a.get("title"),
+                    "dest": a.get("dest"),
                     "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "action": a.get("action")}
                    for a in [a for a in m.alerts if a.get("level") != "INFO"][-30:][::-1]],
         "alert_groups": alert_groups(m, day),
         "series": m.series(),
         "protos": m.protos(),
-        "geo": m.geo(),
+        "geo": geo,
         "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
                     "client_name": m.name(c), "label": label}
                    for ts, c, label in m.recent_dests(30)],
@@ -788,17 +831,35 @@ WEB_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ExitGuard</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--mute:#6a737d;--line:#e3e6ea;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--info:#0969da;--hdr:#0b3d91}
-@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#161b22;--fg:#e6edf3;--mute:#8b949e;--line:#30363d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--info:#58a6ff;--hdr:#1f3b70}}
+:root{color-scheme:dark;--bg:#080f1a;--card:#101c2b;--fg:#e6edf3;--mute:#9babbe;--line:#26364a;--ok:#49dba0;--bad:#ff717b;--warn:#eeb45b;--info:#65b7ff;--hdr:#101c2b}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif}
-header{background:var(--hdr);color:#fff;padding:10px 16px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+header{background:var(--hdr);color:#fff;padding:18px 24px;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;border-bottom:1px solid var(--line)}
 header h1{font-size:17px;margin:0}
 header .sub{opacity:.85;font-size:13px}
 .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;background:#ffffff30;margin-left:4px}
-main{padding:12px 16px;display:grid;gap:12px;grid-template-columns:1fr;max-width:1200px;margin:0 auto}
-@media (min-width:900px){main{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
+main{padding:clamp(10px,1.5vw,28px);display:grid;gap:clamp(12px,1.2vw,24px);grid-template-columns:minmax(0,1fr);grid-template-areas:"summary" "globe" "recent" "alerts" "clients" "dests" "protocols" "status" "slack";max-width:2400px;margin:0 auto}
+.summary{grid-area:summary}.globe-panel{grid-area:globe}.recent-panel{grid-area:recent}.alerts-panel{grid-area:alerts}.clients-panel{grid-area:clients}.dests-panel{grid-area:dests}.protocols-panel{grid-area:protocols}.status-panel{grid-area:status}.slack-panel{grid-area:slack}
+@media(min-width:760px){main{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"summary summary" "globe globe" "recent alerts" "clients clients" "dests protocols" "status status" "slack slack"}}
+@media(min-width:1200px){main{grid-template-columns:minmax(0,1.55fr) minmax(360px,1fr);grid-template-areas:"summary summary" "globe recent" "globe alerts" "clients clients" "dests protocols" "status status" "slack slack"}.globe-panel{display:flex;flex-direction:column;justify-content:center}.globe-panel h2{align-self:stretch}#recent{max-height:220px}#alerts{max-height:260px;overflow:auto}.clients-panel #clients{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.clients-panel #clients .row{border-top:0}.clients-panel #traffic{max-width:1200px;margin:auto}}
+header>*{min-width:0;overflow-wrap:anywhere}section,p,.metric{overflow-wrap:anywhere}main>*{min-width:0}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.metric{padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.metric span{display:block;color:var(--mute);font-size:12px}.metric strong{display:block;font-size:32px;font-variant-numeric:tabular-nums;margin-top:8px}
+.metric strong.bad{color:var(--bad)}
+.globe-panel{background:radial-gradient(ellipse at center,#142b45,var(--card) 75%);text-align:center}
+.globe-panel h2{text-align:left}#globe{width:100%;max-width:980px;margin:auto;max-height:75vh;min-height:220px}
+#traffic{margin-top:12px}#donut{max-width:600px;margin:auto}
+.service{flex:1 1 150px;padding:10px 12px;border-left:4px solid currentColor;background:#080f1a;border-radius:4px}
+.status-detail{flex-basis:100%;font-size:12px}
+.slack-guide summary{cursor:pointer;display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg)}
+.slack-guide li{margin:8px 0}.slack-guide code{overflow-wrap:anywhere}
+#recent{max-height:300px;overflow:auto}.fresh{animation:arrival .65s ease-out}
+#recent,#alerts{scrollbar-gutter:stable}
+@keyframes arrival{from{transform:translateY(-12px);background:#1d4357}to{transform:translateY(0);background:transparent}}
+@media(max-width:600px){main{padding:12px 10px;gap:12px}.summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric strong{font-size:28px}header{padding:14px}.globe-panel{padding:10px 4px}}
+@media(prefers-reduced-motion:reduce){.fresh{animation:none}}
 h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transform:none}
 .stat{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.info{color:var(--info)}.mute{color:var(--mute)}
@@ -809,21 +870,78 @@ h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transfor
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
 .lv{font-size:11px;font-weight:700;padding:0 5px;border-radius:4px;border:1px solid currentColor}
 .empty{color:var(--mute);padding:6px 0}
+.chart{width:100%;height:auto;display:block}
+.eg-alert{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:10px 0}
+.eg-lv{font-size:10px;font-weight:700;color:#fff;border-radius:4px;padding:2px 5px;min-width:58px;text-align:center}
+.eg-body{flex:1;min-width:0}.eg-title{font-weight:600;overflow-wrap:anywhere}
+.eg-meta{font-size:12px;color:var(--mute);overflow-wrap:anywhere}.eg-count{font-weight:700}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
+.health{flex-basis:100%;font-weight:600}.stale .summary,.stale #status{opacity:.6}
+.stale #globe{opacity:.55}.stale #freshness{color:var(--warn)}#err{color:var(--bad)}
+#traffic{max-height:260px}#attention{max-height:220px;overflow:auto}
+main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" "dests" "protocols" "slack"}
+@media(min-width:760px){main{grid-template-areas:"summary summary" "status status" "alerts alerts" "globe recent" "clients clients" "dests protocols" "slack slack"}}
+@media(min-width:1200px){main{grid-template-areas:"summary summary" "status status" "globe alerts" "globe recent" "clients clients" "dests protocols" "slack slack"}}
+@media(max-width:1199px){#globe{max-height:50vh}.alerts-panel #alerts{max-height:200px;overflow:auto}}
 </style></head><body>
 <header><h1>ExitGuard<span id="demo" class="badge" hidden>DEMO</span></h1>
-<span class="sub" id="host">…</span><span class="sub" id="when"></span></header>
+<span class="sub" id="host">…</span><span class="sub" id="when"></span>
+<span id="freshness" class="health">불러오는 중…</span><span id="err" role="alert"></span></header>
 <main>
-<section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
-<section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div></section>
-<section><h2>알림 (최신순)</h2><div id="alerts"></div></section>
-<section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
-<section><h2>실시간 접속지 (SNI / DNS / HTTP)</h2><div id="recent"></div></section>
+<div class="summary wide" aria-label="네트워크 요약">
+<div class="metric"><span>연결 기기</span><strong id="count-clients">—</strong></div>
+<div class="metric"><span>접속 목적지 · 최근 2분</span><strong id="count-dests">—</strong></div>
+<div class="metric"><span>차단</span><strong id="count-blocked">—</strong></div>
+<div class="metric"><span>위험 알림 · 24h</span><strong id="count-risk">—</strong></div>
+</div>
+<section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">마우스 드래그·휠 확대 · 터치: 가로 회전, 세로 페이지 스크롤 · 상세 정보는 주의 목적지 목록에서도 확인</p></section>
+<section class="recent-panel"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent" tabindex="0" role="region" aria-label="실시간 접속 목록"></div></section>
+<section class="status-panel"><h2>상태</h2><div class="stat" id="status"></div></section>
+<section class="slack-panel"><h2>Slack 이상징후 알림</h2><p id="slack-status" role="status"></p>
+<details class="slack-guide"><summary>Slack 설정 안내</summary>
+<ol><li>Slack에서 알림을 받을 채널용 Incoming Webhook을 만드세요. 워크스페이스 관리자 승인이 필요할 수 있습니다.</li>
+<li>서버의 <code>/etc/exitguard/config.json</code> (또는 <code>EXITGUARD_CONFIG</code> 지정 파일)에서 기존 설정을 유지한 채 <code>notify.webhook_url</code>에 webhook을 저장하세요. 주소는 비밀 값입니다. 채팅·브라우저·Git에 붙여 넣지 말고 서버의 보안 편집 경로를 사용하세요.</li>
+<li><code>notify.min_level</code>로 전송 기준을 선택하세요. 기본 MEDIUM 이상이며 HIGH로 올리면 높은 위험만 전송합니다. <code>notify.dedupe_sec</code>의 기본값은 600초입니다. 동일 알림이 반복되는 동안 중복 발송을 억제합니다.</li>
+<li>파일 접근 권한을 제한하고 <code>sudo systemctl restart exitguard-watch</code>로 감시 서비스를 재시작하세요. 설정됨 표시는 파일 설정만 확인하며, 서비스의 적용 여부나 전송 성공을 보장하지 않습니다.</li></ol>
+<p>알림에는 기기·목적지 IP, 이벤트 제목 및 상세 정보가 포함될 수 있고 Slack으로 전송됩니다. 채널 접근 권한과 외부 전송 정책을 먼저 확인하세요.</p>
+<p>이 화면은 설정을 저장하거나 메시지를 보내지 않습니다. 알림은 감시 서비스가 전송하므로 브라우저를 닫아도 동작합니다. 실제 수신 여부는 Slack 채널에서 확인하세요.</p>
+</details></section>
+<section class="clients-panel"><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
+<section class="alerts-panel"><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>주의 목적지 · 차단 및 최근 24h 알림</h2><div id="attention" tabindex="0" role="region" aria-label="주의 목적지 목록"></div><h2>알림 묶음 (최신순)</h2><div id="alerts" tabindex="0" role="region" aria-label="알림 묶음 목록"></div></section>
+<section class="dests-panel"><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
+<section class="protocols-panel"><h2>프로토콜 비율 · 최근 5분</h2><svg id="donut" class="chart" aria-label="프로토콜별 트래픽 비율"></svg></section>
 </main>
-<footer>읽기 전용 · 2초마다 갱신 · <span id="err"></span></footer>
+<footer>읽기 전용 · 2초마다 갱신</footer>
+<script src="static/viz.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+let globe = null, latestGeo = null, centered = false;
+let recentKeys = null, mapFailed = false;
+let lastSuccess = 0, fetchError = false;
+function health(){
+  const age = lastSuccess ? Math.floor((Date.now() - lastSuccess) / 1000) : null;
+  const stale = fetchError || (age !== null && age >= 10);
+  document.body.classList.toggle("stale", stale);
+  $("freshness").textContent = age === null ? (fetchError ? "데이터 수신 실패 · 상태 미확인" : "불러오는 중…") :
+    (stale ? "실시간 상태 미확인 · " : "정상 수신 · ") + age + "초 전 데이터";
+  if(globe) globe.pause(stale);
+}
+health(); setInterval(health, 1000);
+function updateGlobe(){
+  if(!latestGeo) return;
+  $("geo-empty").hidden = !mapFailed && !!(latestGeo.home && latestGeo.points && latestGeo.points.length);
+  if(!globe) return;
+  globe.update(latestGeo);
+  if(!centered){globe.center(); centered = true;}
+}
+fetch("static/countries-110m.json").then(r => {
+  if(!r.ok) throw new Error("지도 로드 실패");
+  return r.json();
+}).then(topo => {
+  globe = EGViz.globe($("globe"), topo, {width:600, height:520});
+  updateGlobe();
+}).catch(() => {mapFailed = true; $("geo-empty").hidden = false; $("geo-empty").textContent = "지도를 불러올 수 없습니다.";});
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=String(text); return e;}
 const LV = {CRITICAL:"bad",HIGH:"bad",MEDIUM:"warn",LOW:"info",INFO:"mute"};
 function fill(box, items, render, emptyText){
@@ -833,15 +951,34 @@ function fill(box, items, render, emptyText){
 }
 function hms(iso){return iso ? String(iso).slice(11,19) : "";}
 function render(s){
+  const slack = s.slack || {state:"unknown", min_level:"UNKNOWN"};
+  const slackLabels = {demo:"데모 · Slack 발송 안 함", configured:"Slack webhook 설정됨 · 전송 성공 미확인", missing:"미설정", other:"다른 webhook 설정됨 · Slack 미확인", unknown:"설정 확인 불가 · 파일 또는 접근 권한 확인"};
+  $("slack-status").textContent = (slackLabels[slack.state] || slackLabels.unknown) + " · 알림 기준: " + slack.min_level;
+  latestGeo = s.geo || {home:null, points:[]};
+  updateGlobe();
+  $("count-clients").textContent = s.clients.length.toLocaleString();
+  $("count-dests").textContent = s.destination_count == null ? "—" : s.destination_count.toLocaleString();
+  $("count-blocked").textContent = s.blocked.toLocaleString();
+  $("count-risk").textContent = (s.alerts_24h.CRITICAL + s.alerts_24h.HIGH).toLocaleString();
+  $("count-blocked").classList.toggle("bad", s.blocked > 0);
+  $("count-risk").classList.toggle("bad", s.alerts_24h.CRITICAL + s.alerts_24h.HIGH > 0);
+  fill($("attention"), s.attention_dests || [], p => {
+    const row = el("div","row");
+    row.append(el("div","main", (p.blocked ? "차단 · " : "") + (p.city || "위치 정보 없음")));
+    row.append(el("span","mono", [p.host, p.ip].filter(Boolean).join(" · ")));
+    const a = p.last_alert;
+    if(a) row.append(el("span","k", [a.level, a.ts, a.title].filter(Boolean).join(" · ")));
+    return row;
+  }, "주의 목적지 없음");
   $("demo").hidden = !s.demo;
   $("host").textContent = s.host + " · exit node: " + (s.exit_node_approved ? "승인됨" : "미승인/미광고");
   $("when").textContent = hms(s.generated);
   const st = $("status"); st.replaceChildren();
   for(const [name, v] of Object.entries(s.services)){
-    st.append(el("span", v==="active" ? "ok" : "bad", (v==="active" ? "● " : "✖ ") + name));
+    st.append(el("span", "service " + (v==="active" ? "ok" : "bad"), (v==="active" ? "● " : "✖ ") + name + " · " + v));
   }
   const c = s.capture;
-  st.append(el("span", c.drop_pct > 1 ? "bad" : "", "캡처 " + c.packets.toLocaleString() + " pkt · 드롭 " + c.drops.toLocaleString() + " (" + c.drop_pct.toFixed(2) + "%)"));
+  st.append(el("span", "status-detail " + (c.drop_pct > 1 ? "bad" : "mute"), "캡처 " + c.packets.toLocaleString() + " pkt · 드롭 " + c.drops.toLocaleString() + " (" + c.drop_pct.toFixed(2) + "%)"));
   const a = s.alerts_24h;
   st.append(el("span", (a.CRITICAL + a.HIGH) ? "bad" : a.MEDIUM ? "warn" : "", "24h 알림 C" + a.CRITICAL + " H" + a.HIGH + " M" + a.MEDIUM + " L" + a.LOW));
   st.append(el("span", s.quarantined ? "bad" : "", s.nft_visible ? ("차단 " + s.blocked + " · 격리 " + s.quarantined) : "차단/격리: root 필요"));
@@ -856,14 +993,10 @@ function render(s){
     return d;
   }, "아직 이 exit node 를 지나는 트래픽이 없습니다.");
 
-  fill($("alerts"), s.alerts, x => {
-    const d = el("div","row");
-    const lv = el("span","lv " + (LV[x.level] || ""), x.level); d.append(lv);
-    d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
-    d.append(el("div","main", (x.title || "") + (x.action && !String(x.action).includes("실패") ? " ⛔" : "")));
-    if(x.action) d.append(el("span","k", x.action));
-    return d;
-  }, "알림 없음");
+  EGViz.levelBars($("bars"), s.alerts_24h);
+  EGViz.line($("traffic"), s.series);
+  EGViz.donut($("donut"), s.protos);
+  EGViz.alertGroups($("alerts"), s.alert_groups);
 
   fill($("dests"), s.top_dests, x => {
     const d = el("div","row");
@@ -872,20 +1005,25 @@ function render(s){
     return d;
   }, "최근 2분 트래픽 없음");
 
-  fill($("recent"), s.recent, x => {
-    const d = el("div","row");
+  const ordered = [...s.recent].sort((a,b) => String(b.ts).localeCompare(String(a.ts)));
+  const key = x => JSON.stringify([x.ts, x.client, x.label]);
+  fill($("recent"), ordered, x => {
+    const d = el("div","row" + (recentKeys && !recentKeys.has(key(x)) ? " fresh" : ""));
     d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
     d.append(el("div","main mono", x.label));
     return d;
   }, "아직 없음");
+  recentKeys = new Set(ordered.map(key));
 }
 async function tick(){
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try{
-    const r = await fetch("api/snapshot", {cache:"no-store"});
+    const r = await fetch("api/snapshot", {cache:"no-store", signal:controller.signal});
     if(!r.ok) throw new Error("HTTP " + r.status);
-    render(await r.json()); $("err").textContent = "";
-  }catch(e){ $("err").textContent = "연결 오류: " + e.message; }
-  finally{ setTimeout(tick, 2000); }
+    render(await r.json()); lastSuccess = Date.now(); fetchError = false; $("err").textContent = "";
+  }catch(e){ fetchError = true; $("err").textContent = "연결 오류 · 표시된 상태를 현재 상태로 판단하지 마세요."; }
+  finally{ clearTimeout(timeout); health(); setTimeout(tick, 2000); }
 }
 tick();
 </script></body></html>
