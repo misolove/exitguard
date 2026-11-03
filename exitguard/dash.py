@@ -51,6 +51,14 @@ def fit(s, w, right=False):
     return pad + out if right else out + pad
 
 
+def printable(s):
+    """네트워크에서 온 문자열(SNI·DNS·HTTP·알림 제목)의 제어문자를 지운다.
+    NUL(Suricata QUIC SNI 패딩 등)은 버리고, 나머지 제어문자·방향 전환 문자는 '?' 로. 터미널 이스케이프 주입과 curses NUL 오류 방지."""
+    s = str(s).replace("\x00", "")
+    return "".join("?" if unicodedata.category(ch) == "Cc" or "\u202a" <= ch <= "\u202e" or "\u2066" <= ch <= "\u2069"
+                   else ch for ch in s)
+
+
 def clip(s, w):
     """표시 폭 w 이하로 자르기만 함 (패딩 없음)."""
     return fit(s, w).rstrip(" ") if wcwidth(s) > w else s
@@ -160,16 +168,16 @@ class Model:
             elif t in ("tls", "quic"):
                 sni = (ev.get("tls") or ev.get("quic") or {}).get("sni")
                 if sni:
-                    self.dests.append((ts, client, f"{sni} [{t}]"))
+                    self.dests.append((ts, client, printable(f"{sni} [{t}]")))
             elif t == "http":
                 h = ev.get("http", {})
-                self.dests.append((ts, client, f"{h.get('hostname','?')}{(h.get('url') or '')[:30]} [http]"))
+                self.dests.append((ts, client, printable(f"{h.get('hostname','?')}{(h.get('url') or '')[:30]} [http]")))
             elif t == "dns":
                 d = ev.get("dns", {})
                 if d.get("type") in ("query", "request"):
                     name = d.get("rrname") or ((d.get("queries") or [{}])[0].get("rrname"))
                     if name:
-                        self.dests.append((ts, client, f"{name} [dns]"))
+                        self.dests.append((ts, client, printable(f"{name} [dns]")))
 
     def read_alerts(self):
         if not os.path.exists(ALERTS):
@@ -182,7 +190,10 @@ class Model:
                 f.seek(self.alerts_pos)
                 for line in f:
                     try:
-                        self.alerts.append(json.loads(line))
+                        a = json.loads(line)
+                        if isinstance(a.get("title"), str):
+                            a["title"] = printable(a["title"])
+                        self.alerts.append(a)
                     except json.JSONDecodeError:
                         pass
                 self.alerts_pos = f.tell()
@@ -414,7 +425,7 @@ class UI:
         if y >= h or x >= w:
             return
         maxw = w - x if maxw is None else min(maxw, w - x)
-        s = clip(s, max(0, maxw - 1 if y == h - 1 else maxw))   # 글자 수가 아닌 표시 폭 기준 (한글 2칸)
+        s = clip(printable(s), max(0, maxw - 1 if y == h - 1 else maxw))   # 글자 수가 아닌 표시 폭 기준 (한글 2칸)
         if not s:
             return
         try:
