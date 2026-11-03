@@ -821,7 +821,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <main>
 <section class="wide"><h2>목적지 지구본</h2><svg id="globe" viewBox="0 0 960 480" style="width:100%;display:block" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
 <section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
-<section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div></section>
+<section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
 <section><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts"></div></section>
 <section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
 <section><h2>실시간 접속지 (SNI / DNS / HTTP)</h2><div id="recent"></div></section>
@@ -881,6 +881,7 @@ function render(s){
   }, "아직 이 exit node 를 지나는 트래픽이 없습니다.");
 
   EGViz.levelBars($("bars"), s.alerts_24h);
+  EGViz.line($("traffic"), s.series);
   EGViz.alertGroups($("alerts"), s.alert_groups);
 
   fill($("dests"), s.top_dests, x => {
