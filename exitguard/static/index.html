@@ -48,7 +48,8 @@ h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transfor
 .eg-body{flex:1;min-width:0}.eg-title{font-weight:600;overflow-wrap:anywhere}
 .eg-meta{font-size:12px;color:var(--mute);overflow-wrap:anywhere}.eg-count{font-weight:700}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
-.health{flex-basis:100%;font-weight:600}.stale .summary,.stale #status{opacity:.6}
+.health{flex-basis:100%;font-weight:600}.metric strong.unknown{color:var(--mute);font-size:22px}
+.detection{font-size:13px;font-weight:600}.detection.ok{color:var(--ok)}.detection.warn,#risk-note{color:var(--warn)}.detection.bad{color:var(--bad)}#risk-note{font-style:normal}.stale .summary,.stale #status{opacity:.6}
 .stale #globe{opacity:.55}.stale #freshness{color:var(--warn)}#err{color:var(--bad)}
 #traffic{max-height:260px}#attention{max-height:220px;overflow:auto}
 main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" "dests" "protocols" "slack"}
@@ -64,7 +65,7 @@ main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" 
 <div class="metric"><span>연결 기기</span><strong id="count-clients">—</strong></div>
 <div class="metric"><span>접속 목적지 · 최근 2분</span><strong id="count-dests">—</strong></div>
 <div class="metric"><span>차단</span><strong id="count-blocked">—</strong></div>
-<div class="metric"><span>위험 알림 · 24h</span><strong id="count-risk">—</strong></div>
+<div class="metric"><span>위험 알림 · 24h <em id="risk-note" class="warn"></em></span><strong id="count-risk">—</strong></div>
 </div>
 <section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p id="geo-src" class="mute" hidden>위치는 나라 단위(국가 중심 좌표)이며 실제 위치가 아닙니다 · IP Geolocation by DB-IP (db-ip.com, CC BY 4.0)</p><p class="mute">드래그 회전 · 확대: 두 손가락 벌리기/모으기(트랙패드·터치) 또는 Ctrl+휠 · 터치: 가로 회전, 세로 페이지 스크롤 · 상세 정보는 주의 목적지 목록에서도 확인</p></section>
 <section class="recent-panel"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent" tabindex="0" role="region" aria-label="실시간 접속 목록"></div></section>
@@ -125,6 +126,7 @@ function fill(box, items, render, emptyText){
   for(const it of items) box.append(render(it));
 }
 function hms(iso){return iso ? String(iso).slice(11,19) : "";}
+function agoText(sec){return sec < 60 ? "방금" : sec < 3600 ? Math.floor(sec/60) + "분 전" : sec < 172800 ? Math.floor(sec/3600) + "시간 전" : Math.floor(sec/86400) + "일 전";}
 function render(s){
   const slack = s.slack || {state:"unknown", min_level:"UNKNOWN"};
   const slackLabels = {demo:"데모 · Slack 발송 안 함", configured:"Slack webhook 설정됨 · 전송 성공 미확인", missing:"미설정", other:"다른 webhook 설정됨 · Slack 미확인", unknown:"설정 확인 불가 · 파일 또는 접근 권한 확인"};
@@ -133,9 +135,12 @@ function render(s){
   updateGlobe();
   $("count-clients").textContent = s.clients.length.toLocaleString();
   $("count-dests").textContent = s.destination_count == null ? "—" : s.destination_count.toLocaleString();
-  $("count-blocked").textContent = s.blocked.toLocaleString();
+  // 권한이 없어 모르는 값은 0 이 아니라 "확인 불가" (모름을 안전으로 보이게 하지 않는다)
+  $("count-blocked").textContent = s.nft_visible ? s.blocked.toLocaleString() : "확인 불가";
+  $("count-blocked").classList.toggle("unknown", !s.nft_visible);
+  $("count-blocked").title = s.nft_visible ? "" : "차단 목록은 root 권한이 있어야 보입니다 (sudo exitguard-top)";
   $("count-risk").textContent = (s.alerts_24h.CRITICAL + s.alerts_24h.HIGH).toLocaleString();
-  $("count-blocked").classList.toggle("bad", s.blocked > 0);
+  $("count-blocked").classList.toggle("bad", s.nft_visible && s.blocked > 0);
   $("count-risk").classList.toggle("bad", s.alerts_24h.CRITICAL + s.alerts_24h.HIGH > 0);
   fill($("attention"), s.attention_dests || [], p => {
     const row = el("div","row");
@@ -149,8 +154,19 @@ function render(s){
   $("host").textContent = s.host + " · exit node: " + (s.exit_node_approved ? "승인됨" : "미승인/미광고");
   $("when").textContent = hms(s.generated);
   const st = $("status"); st.replaceChildren();
+  const d = s.detection || {state:"warn"};
+  const rules = d.rules_loaded == null ? "규칙 수 확인 불가" : "규칙 " + d.rules_loaded.toLocaleString() + "개";
+  const lastSig = d.age_s == null ? "시그니처 탐지 기록 없음" : "마지막 시그니처 탐지 " + agoText(d.age_s);
+  const detText = d.home_net_ok === false ? "✖ 탐지 이상 · suricata.yaml 의 HOME_NET 이 tailnet 이 아님 (규칙 대부분이 걸리지 않음)" :
+    d.state === "bad" ? "✖ 탐지 이상 · 규칙 적재 실패 (" + rules + ", 실패 " + (d.rules_failed || 0) + ")" :
+    d.state === "warn" ? "⚠ 탐지 확인 필요 · " + lastSig + " · " + rules + " · 오래 조용하면 탐지가 멈췄을 수 있음" :
+    "● 탐지 동작 중 · " + lastSig + " · " + rules;
+  st.append(el("span", "status-detail detection " + (d.state === "ok" ? "ok" : d.state), detText));
+  $("risk-note").textContent = d.state === "ok" ? "" : "탐지 확인 필요";
   for(const [name, v] of Object.entries(s.services)){
-    st.append(el("span", "service " + (v==="active" ? "ok" : "bad"), (v==="active" ? "● " : "✖ ") + name + " · " + v));
+    const known = v && v !== "?";
+    st.append(el("span", "service " + (v==="active" ? "ok" : known ? "bad" : "warn"),
+      (v==="active" ? "● " : known ? "✖ " : "? ") + name + " · " + (known ? v : "확인 불가")));
   }
   const c = s.capture;
   st.append(el("span", "status-detail " + (c.drop_pct > 1 ? "bad" : "mute"), "캡처 " + c.packets.toLocaleString() + " pkt · 드롭 " + c.drops.toLocaleString() + " (" + c.drop_pct.toFixed(2) + "%)"));
