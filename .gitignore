@@ -5,3 +5,4 @@ reports/
 *.log
 *.jsonl
 .env
+.DS_Store
