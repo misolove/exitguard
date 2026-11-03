@@ -49,7 +49,8 @@ install -m 755 "$SRC/bin/exitguardctl" /usr/local/bin/exitguardctl
 ln -sf /usr/local/lib/exitguard/dash.py /usr/local/bin/exitguard-top
 install -m 644 "$SRC"/systemd/*.service "$SRC"/systemd/*.timer /etc/systemd/system/
 # 웹 대시보드(exitguard-web.service, 선택) 전용 시스템 사용자
-id -u exitguard-web >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin exitguard-web
+# /etc/passwd 를 직접 본다: 예전 DynamicUser 서비스가 돌고 있으면 같은 이름의 임시 사용자가 id/getent 로 보여 생성을 건너뛴다
+grep -q "^exitguard-web:" /etc/passwd || { systemctl stop exitguard-web.service 2>/dev/null || true; useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin exitguard-web; }
 
 step "4/8 nftables 차단 테이블 로드"
 if nft -f /etc/exitguard/nftables-exitguard.conf; then
