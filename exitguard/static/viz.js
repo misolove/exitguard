@@ -265,7 +265,9 @@
       grad.append(s("stop", { offset: "0%", "stop-color": "#1d3557" }), s("stop", { offset: "100%", "stop-color": "#0b1526" }));
       defs.append(cp, grad);
       svg.append(defs);
-      const root = s("g", { "clip-path": `url(#${clip})` });
+      // 매 프레임 다시 그리는 요소는 포인터를 받지 않는다: 이벤트 대상이 사라지면 Safari 핀치가 중간에 끊긴다.
+      // 툴팁·드래그는 svg 자체와 좌표로 처리하므로 영향 없음
+      const root = s("g", { "clip-path": `url(#${clip})`, "pointer-events": "none" });
       svg.append(root);
       root.append(s("circle", { cx: W / 2, cy: H / 2, r: R, fill: `url(#${clip}sea)` }));
 
