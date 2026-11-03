@@ -11,7 +11,7 @@ set -eu
 DEST=$1
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 
-tar -C "$SRC" -czf - --exclude='__pycache__' exitguard systemd/exitguard-web.service systemd/exitguard-geoip.service systemd/exitguard-geoip.timer \
+COPYFILE_DISABLE=1 tar -C "$SRC" --no-xattrs -czf - --exclude='__pycache__' exitguard systemd/exitguard-web.service systemd/exitguard-geoip.service systemd/exitguard-geoip.timer \
   | ssh "$DEST" 'rm -rf ~/exitguard-staging && mkdir -p ~/exitguard-staging && tar -C ~/exitguard-staging -xzf -'
 
 ssh -t "$DEST" 'sudo sh -eu -c '"'"'
