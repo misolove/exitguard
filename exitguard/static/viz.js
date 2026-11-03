@@ -121,6 +121,7 @@
     for (const g of groups) {
       const row = div("eg-alert");
       const lv = div("eg-lv", g.level); lv.style.background = LEVEL_COLOR[g.level] || LEVEL_COLOR.INFO;
+      lv.style.color = g.level === "CRITICAL" ? "#fff" : "#0b1526";
       const body = div("eg-body");
       body.append(div("eg-title", g.title || ""));
       body.append(div("eg-meta", `${String(g.last || "").slice(11, 19)} · ${(g.clients || []).join(", ")}` + (g.action ? ` · ${g.action}` : "")));
@@ -183,6 +184,10 @@
     let alertTimes = null;
     const flashes = new Map();
     let pinch0 = null, raf = 0;
+    let paused = false, touchStart = null;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const animate = () => !opts.static && !paused && !reducedMotion.matches;
+    reducedMotion.addEventListener("change", () => { cancelAnimationFrame(raf); raf = 0; redraw(); });
     let hover = null;
     const tip = document.createElement("div");
     tip.setAttribute("role", "tooltip");
@@ -202,7 +207,7 @@
       }
       tip.hidden = !hit;
       if (!hit) return;
-      const text = `${hit.city || "지역 정보 없음"}\n${hit.host || "호스트 정보 없음"}\nIP: ${hit.ip}\n트래픽: ${human(hit.bytes || 0)} · ${hit.blocked ? "차단됨" : "차단되지 않음"}${hit.last_alert ? "\n최근 알림: " + (hit.last_alert.title || hit.last_alert.level || "") : ""}`;
+      const text = `${hit.city || "지역 정보 없음"}\n${hit.host || "호스트 정보 없음"}\nIP: ${hit.ip}\n트래픽: ${human(hit.bytes || 0)} · ${hit.blocked ? "차단됨" : "차단되지 않음"}${hit.last_alert ? "\n최근 알림: " + [hit.last_alert.level, hit.last_alert.ts, hit.last_alert.title].filter(Boolean).join(" · ") : ""}`;
       if (tip.textContent !== text) tip.textContent = text;
       tip.style.left = Math.max(8, Math.min(hover.x + 16, window.innerWidth - tip.offsetWidth - 8)) + "px";
       tip.style.top = Math.max(8, Math.min(hover.y + 16, window.innerHeight - tip.offsetHeight - 8)) + "px";
@@ -212,7 +217,7 @@
     svg.addEventListener("pointerdown", () => { hover = null; tip.hidden = true; });
 
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-    svg.style.touchAction = "none";
+    svg.style.touchAction = "pan-y";
     svg.style.cursor = "grab";
 
     // 정사영(orthographic). [x, y, 보이는지(cos c > 0)]
@@ -283,7 +288,7 @@
         const home = [geo.home.lon, geo.home.lat];
         const pts = geo.points || [];
         const maxB = Math.max(1, ...pts.map(p => p.bytes || 0));
-        const t = (performance.now() - state.t0) / 1000;
+        const t = animate() ? (performance.now() - state.t0) / 1000 : 0;
         for (const p of pts) {
           if (p.lat === geo.home.lat && p.lon === geo.home.lon) continue;
           const gc = greatCircle(home, [p.lon, p.lat], 48);
@@ -302,12 +307,12 @@
           if (!vis) continue;
           const r = 2.5 + 6 * Math.sqrt((p.bytes || 0) / maxB);
           const col = p.blocked ? LEVEL_COLOR.HIGH : LEVEL_COLOR[p.level] || "#f0a23b";
-          if ((flashes.get(p.ip) || 0) > performance.now()) {
+          if (animate() && (flashes.get(p.ip) || 0) > performance.now()) {
             const alpha = 0.45 + 0.45 * Math.sin(performance.now() / 100);
             root.append(s("circle", { cx: x, cy: y, r: r + 7, fill: "#fff", "fill-opacity": alpha }));
           }
           if (p.blocked || p.level === "HIGH" || p.level === "CRITICAL") {
-            const ph = ((performance.now() - state.t0) / 1400) % 1;
+            const ph = animate() ? ((performance.now() - state.t0) / 1400) % 1 : 0;
             root.append(s("circle", { cx: x, cy: y, r: r + 14 * ph, fill: "none", stroke: col, "stroke-opacity": 1 - ph, "stroke-width": 2 }));
           }
           const dot = s("circle", { cx: x, cy: y, r, fill: col, "fill-opacity": 0.9, stroke: "#0b1526", "stroke-width": 1 });
@@ -322,14 +327,14 @@
         }
       }
       showDetail();
-      if (!opts.static) raf = requestAnimationFrame(draw);   // 점선 흐름·펄스 애니메이션
+      if (animate()) raf = requestAnimationFrame(draw);   // 점선 흐름·펄스 애니메이션
     }
     function redraw() { if (!raf) raf = requestAnimationFrame(draw); }
 
     // ---- 조작: 드래그 회전, 휠·핀치 확대, 더블클릭 원위치
     const clampLat = v => Math.max(-85, Math.min(85, v));
     const clampZoom = z => Math.max(1, Math.min(8, z));
-    svg.addEventListener("pointerdown", e => { svg.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); svg.style.cursor = "grabbing"; });
+    svg.addEventListener("pointerdown", e => { touchStart = e.pointerType === "touch" ? [e.clientX, e.clientY] : null; svg.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); svg.style.cursor = "grabbing"; });
     svg.addEventListener("pointermove", e => {
       if (!ptrs.has(e.pointerId)) return;
       const prev = ptrs.get(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]);
@@ -340,16 +345,26 @@
         const px = svg.getBoundingClientRect().width / W;   // 화면 픽셀 → viewBox
         const k = 0.5 / state.zoom / (px || 1);
         state.lon -= (e.clientX - prev[0]) * k;
-        state.lat = clampLat(state.lat + (e.clientY - prev[1]) * k);
+        if(e.pointerType !== "touch") state.lat = clampLat(state.lat + (e.clientY - prev[1]) * k);
       }
       redraw();
     });
-    const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; if (!ptrs.size) svg.style.cursor = "grab"; };
+    const up = e => {
+      ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; if (!ptrs.size) svg.style.cursor = "grab";
+      if(e.type === "pointerup" && touchStart && Math.hypot(e.clientX-touchStart[0], e.clientY-touchStart[1]) < 8) {
+        hover = {x:e.clientX, y:e.clientY}; showDetail();
+      }
+      touchStart = null;
+    };
     svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
     svg.addEventListener("wheel", e => { e.preventDefault(); state.zoom = clampZoom(state.zoom * Math.exp(-e.deltaY * 0.0015)); redraw(); }, { passive: false });
     svg.addEventListener("dblclick", () => { api.center(); });
 
     const api = {
+      pause(value) {
+        if(paused === value) return;
+        paused = value; cancelAnimationFrame(raf); raf = 0; redraw();
+      },
       update(geo) {
         const next = new Map();
         for (const p of (geo && geo.points) || []) {

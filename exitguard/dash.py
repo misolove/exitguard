@@ -795,6 +795,15 @@ def snapshot(m):
         "alerts_24h": {lv: cnt[lv] for lv in ("CRITICAL", "HIGH", "MEDIUM", "LOW")},
         "nft_visible": IS_ROOT or DEMO,
         "blocked": len(m.nft["blocked"]), "quarantined": len(m.nft["quar"]),
+        "destination_count": len({ext for ts, c, ext, port, proto, b, app in m.flows if now - ts <= 120}),
+        "attention_dests": [
+            {"ip": ip, "blocked": ip in m.nft["blocked"],
+             "city": next((p.get("city") for p in geo["points"] if p["ip"] == ip), None),
+             "host": next((p.get("host") for p in geo["points"] if p["ip"] == ip), None),
+             "last_alert": ({k: latest[ip][1].get(k) for k in ("ts", "level", "title")} if ip in latest else None)}
+            for ip in sorted(set(m.nft["blocked"]) | {ip for ip, (ts, a) in latest.items() if ts > day},
+                             key=lambda ip: (ip not in m.nft["blocked"],
+                                             LEVEL_RANK.get(latest.get(ip, (None, {}))[1].get("level"), 9)))],
         "clients": [{"name": r["name"], "ip": r["ip"], "bytes_5m": r["bytes"], "rate": r["rate"],
                      "rate_h": human(r["rate"]).strip() + "/s" if r["rate"] is not None else None,
                      "bytes_5m_h": human(r["bytes"]).strip(), "flows": r["flows"], "dests": r["ndest"],
@@ -838,7 +847,7 @@ section{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .metric{padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
 .metric span{display:block;color:var(--mute);font-size:12px}.metric strong{display:block;font-size:32px;font-variant-numeric:tabular-nums;margin-top:8px}
-.metric:nth-child(3) strong,.metric:nth-child(4) strong{color:var(--bad)}
+.metric strong.bad{color:var(--bad)}
 .globe-panel{background:radial-gradient(ellipse at center,#142b45,var(--card) 75%);text-align:center}
 .globe-panel h2{text-align:left}#globe{width:100%;max-width:980px;margin:auto;max-height:75vh;min-height:220px}
 #traffic{margin-top:12px}#donut{max-width:600px;margin:auto}
@@ -867,17 +876,25 @@ h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transfor
 .eg-body{flex:1;min-width:0}.eg-title{font-weight:600;overflow-wrap:anywhere}
 .eg-meta{font-size:12px;color:var(--mute);overflow-wrap:anywhere}.eg-count{font-weight:700}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
+.health{flex-basis:100%;font-weight:600}.stale .summary,.stale #status{opacity:.6}
+.stale #globe{opacity:.55}.stale #freshness{color:var(--warn)}#err{color:var(--bad)}
+#traffic{max-height:260px}#attention{max-height:220px;overflow:auto}
+main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" "dests" "protocols" "slack"}
+@media(min-width:760px){main{grid-template-areas:"summary summary" "status status" "alerts alerts" "globe recent" "clients clients" "dests protocols" "slack slack"}}
+@media(min-width:1200px){main{grid-template-areas:"summary summary" "status status" "globe alerts" "globe recent" "clients clients" "dests protocols" "slack slack"}}
+@media(max-width:1199px){#globe{max-height:50vh}.alerts-panel #alerts{max-height:200px;overflow:auto}}
 </style></head><body>
 <header><h1>ExitGuard<span id="demo" class="badge" hidden>DEMO</span></h1>
-<span class="sub" id="host">…</span><span class="sub" id="when"></span></header>
+<span class="sub" id="host">…</span><span class="sub" id="when"></span>
+<span id="freshness" class="health">불러오는 중…</span><span id="err" role="alert"></span></header>
 <main>
 <div class="summary wide" aria-label="네트워크 요약">
 <div class="metric"><span>연결 기기</span><strong id="count-clients">—</strong></div>
-<div class="metric"><span>목적지</span><strong id="count-dests">—</strong></div>
+<div class="metric"><span>접속 목적지 · 최근 2분</span><strong id="count-dests">—</strong></div>
 <div class="metric"><span>차단</span><strong id="count-blocked">—</strong></div>
 <div class="metric"><span>위험 알림 · 24h</span><strong id="count-risk">—</strong></div>
 </div>
-<section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
+<section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">마우스 드래그·휠 확대 · 터치: 가로 회전, 세로 페이지 스크롤 · 상세 정보는 주의 목적지 목록에서도 확인</p></section>
 <section class="recent-panel"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent" tabindex="0" role="region" aria-label="실시간 접속 목록"></div></section>
 <section class="status-panel"><h2>상태</h2><div class="stat" id="status"></div></section>
 <section class="slack-panel"><h2>Slack 이상징후 알림</h2><p id="slack-status" role="status"></p>
@@ -890,17 +907,27 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <p>이 화면은 설정을 저장하거나 메시지를 보내지 않습니다. 알림은 감시 서비스가 전송하므로 브라우저를 닫아도 동작합니다. 실제 수신 여부는 Slack 채널에서 확인하세요.</p>
 </details></section>
 <section class="clients-panel"><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
-<section class="alerts-panel"><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts" tabindex="0" role="region" aria-label="알림 묶음 목록"></div></section>
+<section class="alerts-panel"><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>주의 목적지 · 차단 및 최근 24h 알림</h2><div id="attention" tabindex="0" role="region" aria-label="주의 목적지 목록"></div><h2>알림 묶음 (최신순)</h2><div id="alerts" tabindex="0" role="region" aria-label="알림 묶음 목록"></div></section>
 <section class="dests-panel"><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
 <section class="protocols-panel"><h2>프로토콜 비율 · 최근 5분</h2><svg id="donut" class="chart" aria-label="프로토콜별 트래픽 비율"></svg></section>
 </main>
-<footer>읽기 전용 · 2초마다 갱신 · <span id="err"></span></footer>
+<footer>읽기 전용 · 2초마다 갱신</footer>
 <script src="static/viz.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
 let globe = null, latestGeo = null, centered = false;
 let recentKeys = null, mapFailed = false;
+let lastSuccess = 0, fetchError = false;
+function health(){
+  const age = lastSuccess ? Math.floor((Date.now() - lastSuccess) / 1000) : null;
+  const stale = fetchError || (age !== null && age >= 10);
+  document.body.classList.toggle("stale", stale);
+  $("freshness").textContent = age === null ? (fetchError ? "데이터 수신 실패 · 상태 미확인" : "불러오는 중…") :
+    (stale ? "실시간 상태 미확인 · " : "정상 수신 · ") + age + "초 전 데이터";
+  if(globe) globe.pause(stale);
+}
+health(); setInterval(health, 1000);
 function updateGlobe(){
   if(!latestGeo) return;
   $("geo-empty").hidden = !mapFailed && !!(latestGeo.home && latestGeo.points && latestGeo.points.length);
@@ -930,9 +957,19 @@ function render(s){
   latestGeo = s.geo || {home:null, points:[]};
   updateGlobe();
   $("count-clients").textContent = s.clients.length.toLocaleString();
-  $("count-dests").textContent = (latestGeo.points || []).length.toLocaleString();
+  $("count-dests").textContent = s.destination_count == null ? "—" : s.destination_count.toLocaleString();
   $("count-blocked").textContent = s.blocked.toLocaleString();
   $("count-risk").textContent = (s.alerts_24h.CRITICAL + s.alerts_24h.HIGH).toLocaleString();
+  $("count-blocked").classList.toggle("bad", s.blocked > 0);
+  $("count-risk").classList.toggle("bad", s.alerts_24h.CRITICAL + s.alerts_24h.HIGH > 0);
+  fill($("attention"), s.attention_dests || [], p => {
+    const row = el("div","row");
+    row.append(el("div","main", (p.blocked ? "차단 · " : "") + (p.city || "위치 정보 없음")));
+    row.append(el("span","mono", [p.host, p.ip].filter(Boolean).join(" · ")));
+    const a = p.last_alert;
+    if(a) row.append(el("span","k", [a.level, a.ts, a.title].filter(Boolean).join(" · ")));
+    return row;
+  }, "주의 목적지 없음");
   $("demo").hidden = !s.demo;
   $("host").textContent = s.host + " · exit node: " + (s.exit_node_approved ? "승인됨" : "미승인/미광고");
   $("when").textContent = hms(s.generated);
@@ -979,12 +1016,14 @@ function render(s){
   recentKeys = new Set(ordered.map(key));
 }
 async function tick(){
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try{
-    const r = await fetch("api/snapshot", {cache:"no-store"});
+    const r = await fetch("api/snapshot", {cache:"no-store", signal:controller.signal});
     if(!r.ok) throw new Error("HTTP " + r.status);
-    render(await r.json()); $("err").textContent = "";
-  }catch(e){ $("err").textContent = "연결 오류: " + e.message; }
-  finally{ setTimeout(tick, 2000); }
+    render(await r.json()); lastSuccess = Date.now(); fetchError = false; $("err").textContent = "";
+  }catch(e){ fetchError = true; $("err").textContent = "연결 오류 · 표시된 상태를 현재 상태로 판단하지 마세요."; }
+  finally{ clearTimeout(timeout); health(); setTimeout(tick, 2000); }
 }
 tick();
 </script></body></html>

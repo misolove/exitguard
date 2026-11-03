@@ -136,6 +136,17 @@ class WebDemoTest(unittest.TestCase):
         snap = json.loads(self.get("api/snapshot")[2])
         self.assertEqual(snap["slack"], {"state": "demo", "min_level": "MEDIUM"})
 
+    def test_health_and_attention_ui(self):
+        html = self.get("")[2].decode()
+        self.assertIn('id="err" role="alert"', html)
+        self.assertLess(html.index('id="err"'), html.index("<main>"))
+        self.assertIn("AbortController", html)
+        self.assertIn("age >= 10", html)
+        self.assertIn('id="attention"', html)
+        snap = json.loads(self.get("api/snapshot")[2])
+        self.assertGreater(snap["destination_count"], 0)
+        self.assertTrue(any(p["blocked"] for p in snap["attention_dests"]))
+
     def test_read_only(self):
         for method in ("POST", "PUT", "DELETE"):
             req = urllib.request.Request(self.base + "api/snapshot", data=b"{}", method=method)
