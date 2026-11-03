@@ -11,12 +11,12 @@ class SlackStatusTest(unittest.TestCase):
         cls.d = load_dash()
 
     def status(self, notify):
-        with patch.object(self.d, "DEMO", False), patch(
+        with patch.object(self.d.core, "DEMO", False), patch(
                 "builtins.open", mock_open(read_data=json.dumps({"notify": notify}))):
             return self.d.slack_status()
 
     def test_demo_does_not_read_configuration(self):
-        with patch.object(self.d, "DEMO", True), patch("builtins.open") as opened:
+        with patch.object(self.d.core, "DEMO", True), patch("builtins.open") as opened:
             self.assertEqual(self.d.slack_status()["state"], "demo")
             opened.assert_not_called()
 
@@ -32,5 +32,5 @@ class SlackStatusTest(unittest.TestCase):
         self.assertEqual(self.status({"webhook_url": "https://example.invalid"})["state"], "other")
         self.assertEqual(self.status({"webhook_url": "https://hooks.slack.com.example.invalid/services/test"})["state"], "other")
         self.assertEqual(self.status({"min_level": "secret-like-value"})["min_level"], "UNKNOWN")
-        with patch.object(self.d, "DEMO", False), patch("builtins.open", side_effect=PermissionError):
+        with patch.object(self.d.core, "DEMO", False), patch("builtins.open", side_effect=PermissionError):
             self.assertEqual(self.d.slack_status()["state"], "unknown")
