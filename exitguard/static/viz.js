@@ -183,6 +183,33 @@
     let alertTimes = null;
     const flashes = new Map();
     let pinch0 = null, raf = 0;
+    let hover = null;
+    const tip = document.createElement("div");
+    tip.setAttribute("role", "tooltip");
+    tip.hidden = true;
+    tip.style.cssText = "position:fixed;z-index:1000;pointer-events:none;white-space:pre-line;overflow-wrap:anywhere;max-width:280px;padding:10px 12px;border:1px solid #52708e;border-radius:8px;background:#0b1526;color:#e6edf3;font:13px/1.6 sans-serif;box-shadow:0 6px 24px #0008";
+    document.body.append(tip);
+    function showDetail() {
+      let hit = null, best = Infinity;
+      const matrix = svg.getScreenCTM();
+      if (hover && !ptrs.size && matrix && state.geo && state.geo.home) {
+        for (const p of state.geo.points || []) {
+          const [x, y, visible] = project(p.lon, p.lat);
+          const screen = new DOMPoint(x, y).matrixTransform(matrix);
+          const distance = Math.hypot(screen.x - hover.x, screen.y - hover.y);
+          if (visible && distance < 14 && distance < best) { hit = p; best = distance; }
+        }
+      }
+      tip.hidden = !hit;
+      if (!hit) return;
+      const text = `${hit.city || "지역 정보 없음"}\n${hit.host || "호스트 정보 없음"}\nIP: ${hit.ip}\n트래픽: ${human(hit.bytes || 0)} · ${hit.blocked ? "차단됨" : "차단되지 않음"}${hit.last_alert ? "\n최근 알림: " + (hit.last_alert.title || hit.last_alert.level || "") : ""}`;
+      if (tip.textContent !== text) tip.textContent = text;
+      tip.style.left = Math.max(8, Math.min(hover.x + 16, window.innerWidth - tip.offsetWidth - 8)) + "px";
+      tip.style.top = Math.max(8, Math.min(hover.y + 16, window.innerHeight - tip.offsetHeight - 8)) + "px";
+    }
+    svg.addEventListener("pointermove", e => { hover = {x:e.clientX, y:e.clientY}; showDetail(); });
+    svg.addEventListener("pointerleave", () => { hover = null; tip.hidden = true; });
+    svg.addEventListener("pointerdown", () => { hover = null; tip.hidden = true; });
 
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     svg.style.touchAction = "none";
@@ -284,7 +311,6 @@
             root.append(s("circle", { cx: x, cy: y, r: r + 14 * ph, fill: "none", stroke: col, "stroke-opacity": 1 - ph, "stroke-width": 2 }));
           }
           const dot = s("circle", { cx: x, cy: y, r, fill: col, "fill-opacity": 0.9, stroke: "#0b1526", "stroke-width": 1 });
-          dot.append(s("title", {}, `${p.city} · ${p.host || p.ip} · ${human(p.bytes)}${p.blocked ? " · 차단됨" : ""}`));
           root.append(dot);
           const atHome = p.lat === geo.home.lat && p.lon === geo.home.lon;
           if (state.zoom >= 1.6 && !atHome) root.append(s("text", { x: x + r + 3, y: y + 3, "font-size": 10, fill: "#e6edf3" }, p.city));
@@ -295,6 +321,7 @@
           root.append(s("text", { x: hx + 7, y: hy - 6, "font-size": 10, "font-weight": 700, fill: "#e6edf3" }, geo.home.city));
         }
       }
+      showDetail();
       if (!opts.static) raf = requestAnimationFrame(draw);   // 점선 흐름·펄스 애니메이션
     }
     function redraw() { if (!raf) raf = requestAnimationFrame(draw); }
