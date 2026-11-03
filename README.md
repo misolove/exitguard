@@ -242,6 +242,7 @@ exitguardctl logs              # watcher 서비스 로그
 - 격리는 자기 기기를 끊는 것이므로 오탐 시 `exitguardctl release` 로 즉시 해제. 공격적이면 `quarantine.enabled=false`.
 - ET Open 룰은 오탐이 있을 수 있음. 특정 sid 를 무시하려면 `/etc/suricata/disable.conf` 에 sid 추가 후 `exitguardctl rules-update`.
 - Suricata 가 TLS 내부는 볼 수 없음(SNI/JA3/인증서까지만). 그래서 DNS·목적지·행위 기반 탐지를 함께 사용.
+- `HOME_NET`(tailnet 대역)은 `suricata.yaml` 에 직접 기록한다. 시작 옵션 `--set` 만으로는 매일 규칙 재적재 뒤 기본값(사설망)으로 돌아가 대부분의 규칙이 걸리지 않는다. 룰 갱신(`exitguard-rules`)은 재적재 후 규칙 적재를 확인하고, 실패하면 HIGH 알림(`ids-health`)을 보낸다.
 - 제거: `sudo ./uninstall.sh`
 
 ## 라이선스
