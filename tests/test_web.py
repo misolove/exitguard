@@ -78,6 +78,19 @@ class WebDemoTest(unittest.TestCase):
         self.assertEqual(sum(g["count"] for g in groups), sum(snap["alerts_24h"].values()))
         self.assertEqual(groups[0]["level"], "HIGH")   # 등급 높은 묶음이 위로
 
+    def test_geo_links_latest_alert_to_destination(self):
+        snap = json.loads(self.get("api/snapshot")[2])
+        points = {p["ip"]: p for p in snap["geo"]["points"]}
+        matched = 0
+        for alert in snap["alerts"]:
+            self.assertIn("dest", alert)
+            if alert["dest"] in points:
+                last = points[alert["dest"]]["last_alert"]
+                self.assertIsNotNone(last)
+                self.assertGreaterEqual(last["ts"], alert["ts"])
+                matched += 1
+        self.assertGreater(matched, 0)
+
     def test_static_parts(self):
         for name, ctype in (("viz.js", "javascript"), ("countries-110m.json", "json"), ("parts.html", "text/html")):
             status, got, body = self.get("static/" + name)
@@ -99,6 +112,21 @@ class WebDemoTest(unittest.TestCase):
         self.assertIn("api/snapshot", html)
         self.assertIn('name="viewport"', html)
         self.assertNotRegex(html, r"""(src|href)=["']?(https?:)?//""")   # CDN/외부 리소스 없음
+
+    def test_graphic_dashboard_uses_local_parts(self):
+        html = self.get("")[2].decode()
+        self.assertIn('<script src="static/viz.js"></script>', html)
+        self.assertIn('fetch("static/countries-110m.json")', html)
+        for name in ("globe", "line", "levelBars", "alertGroups", "donut"):
+            self.assertIn("EGViz." + name + "(", html)
+        self.assertNotRegex(html, r"https?://|(?:src|href)=[\"']//")
+        self.assertNotIn("innerHTML", html)
+        self.assertIn("위치 정보 없음", html)
+        self.assertIn("if(!centered)", html)
+        for name in ("clients", "dests", "blocked", "risk"):
+            self.assertIn('id="count-' + name + '"', html)
+        self.assertLess(html.index('id="globe"'), html.index('id="recent"'))
+        self.assertIn("recentKeys", html)
 
     def test_read_only(self):
         for method in ("POST", "PUT", "DELETE"):

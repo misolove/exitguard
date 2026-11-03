@@ -179,6 +179,9 @@
     const land = topoPolygons(topology, "land");
     const state = { lon: 127, lat: 30, zoom: 1, geo: null, t0: performance.now() };
     const ptrs = new Map();
+    // Remember only the previous snapshot; a new alert briefly highlights its destination.
+    let alertTimes = null;
+    const flashes = new Map();
     let pinch0 = null, raf = 0;
 
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -272,6 +275,10 @@
           if (!vis) continue;
           const r = 2.5 + 6 * Math.sqrt((p.bytes || 0) / maxB);
           const col = p.blocked ? LEVEL_COLOR.HIGH : LEVEL_COLOR[p.level] || "#f0a23b";
+          if ((flashes.get(p.ip) || 0) > performance.now()) {
+            const alpha = 0.45 + 0.45 * Math.sin(performance.now() / 100);
+            root.append(s("circle", { cx: x, cy: y, r: r + 7, fill: "#fff", "fill-opacity": alpha }));
+          }
           if (p.blocked || p.level === "HIGH" || p.level === "CRITICAL") {
             const ph = ((performance.now() - state.t0) / 1400) % 1;
             root.append(s("circle", { cx: x, cy: y, r: r + 14 * ph, fill: "none", stroke: col, "stroke-opacity": 1 - ph, "stroke-width": 2 }));
@@ -316,7 +323,18 @@
     svg.addEventListener("dblclick", () => { api.center(); });
 
     const api = {
-      update(geo) { state.geo = geo; redraw(); },
+      update(geo) {
+        const next = new Map();
+        for (const p of (geo && geo.points) || []) {
+          const ts = Date.parse(p.last_alert && p.last_alert.ts);
+          if (!Number.isFinite(ts)) continue;
+          next.set(p.ip, ts);
+          if (alertTimes && ts > (alertTimes.get(p.ip) || 0)) flashes.set(p.ip, performance.now() + 1800);
+        }
+        for (const [ip, until] of flashes) if (!next.has(ip) || until <= performance.now()) flashes.delete(ip);
+        alertTimes = next;
+        state.geo = geo; redraw();
+      },
       center() {
         const h = state.geo && state.geo.home;
         state.lon = h ? h.lon : 127; state.lat = h ? clampLat(h.lat - 7) : 30; state.zoom = 1; redraw();

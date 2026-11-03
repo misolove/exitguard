@@ -321,6 +321,7 @@ class DemoModel(Model):
                      ("MEDIUM", "dns-dga", "NXDOMAIN 급증: 5분 내 72회"),
                      ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송"),
                      ("HIGH", "ids-alert", "ET MALWARE 알려진 C2 비컨 패턴 (데모)")]
+    ALERT_DESTS = ("198.51.100.10", "192.0.2.53", "203.0.113.40", "203.0.113.66")
 
     def __init__(self):
         super().__init__()
@@ -338,6 +339,7 @@ class DemoModel(Model):
         for i, (lv, kind, title) in enumerate(self.ALERT_SAMPLES):
             ts = datetime.fromtimestamp(now - (len(self.ALERT_SAMPLES) - i) * 900).isoformat(timespec="seconds")
             self.alerts.append({"ts": ts, "level": lv, "kind": kind, "title": title, "client": list(self.CLIENTS)[i % 3],
+                                "dest": self.ALERT_DESTS[i],
                                 "action": "목적지 24h 차단" if lv == "HIGH" else None})
         self.nft["blocked"] = {"203.0.113.66": {}}
 
@@ -361,6 +363,7 @@ class DemoModel(Model):
         if self.rnd.random() < 0.03:
             lv, kind, title = self.rnd.choice(self.ALERT_SAMPLES[:3])
             self.alerts.append({"ts": datetime.now().isoformat(timespec="seconds"), "level": lv, "kind": kind,
+                                "dest": self.ALERT_DESTS[self.ALERT_SAMPLES.index((lv, kind, title))],
                                 "title": title, "client": self.rnd.choice(list(self.CLIENTS)), "action": None})
             self.alerts = self.alerts[-500:]
 
@@ -745,12 +748,22 @@ def snapshot(m):
     now = time.time(); day = now - 86400
     cap = m.stats.get("capture", {}); pk = cap.get("kernel_packets", 0); dr = cap.get("kernel_drops", 0)
     cnt = collections.Counter()
+    latest = {}
     for a in m.alerts:
         try:
-            if datetime.fromisoformat(a["ts"]).timestamp() > day:
+            timestamp = datetime.fromisoformat(a["ts"]).timestamp()
+            if timestamp > day:
                 cnt[a.get("level")] += 1
+            dest = a.get("dest")
+            if dest and timestamp > latest.get(dest, (float("-inf"), None))[0]:
+                latest[dest] = (timestamp, a)
         except Exception:
             pass
+    geo = m.geo()
+    geo = {"home": geo.get("home"), "points": [dict(p) for p in geo.get("points", [])]}
+    for p in geo["points"]:
+        alert = latest.get(p["ip"], (None, None))[1]
+        p["last_alert"] = ({k: alert.get(k) for k in ("ts", "level", "title")} if alert else None)
     return {
         "generated": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
         "demo": DEMO,
@@ -771,12 +784,13 @@ def snapshot(m):
         "top_dests": [{"dest": k, "bytes": b, "bytes_h": human(b).strip(), "client": c, "client_name": m.name(c)}
                       for k, b, c in m.top_dests(n=10)],
         "alerts": [{"ts": a.get("ts"), "level": a.get("level"), "kind": a.get("kind"), "title": a.get("title"),
+                    "dest": a.get("dest"),
                     "client": a.get("client"), "client_name": m.name(a.get("client") or "-"), "action": a.get("action")}
                    for a in [a for a in m.alerts if a.get("level") != "INFO"][-30:][::-1]],
         "alert_groups": alert_groups(m, day),
         "series": m.series(),
         "protos": m.protos(),
-        "geo": m.geo(),
+        "geo": geo,
         "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
                     "client_name": m.name(c), "label": label}
                    for ts, c, label in m.recent_dests(30)],
@@ -788,17 +802,28 @@ WEB_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ExitGuard</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--mute:#6a737d;--line:#e3e6ea;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--info:#0969da;--hdr:#0b3d91}
-@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#161b22;--fg:#e6edf3;--mute:#8b949e;--line:#30363d;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--info:#58a6ff;--hdr:#1f3b70}}
+:root{color-scheme:dark;--bg:#080f1a;--card:#101c2b;--fg:#e6edf3;--mute:#9babbe;--line:#26364a;--ok:#49dba0;--bad:#ff717b;--warn:#eeb45b;--info:#65b7ff;--hdr:#101c2b}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif}
-header{background:var(--hdr);color:#fff;padding:10px 16px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+header{background:var(--hdr);color:#fff;padding:18px 24px;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;border-bottom:1px solid var(--line)}
 header h1{font-size:17px;margin:0}
 header .sub{opacity:.85;font-size:13px}
 .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;background:#ffffff30;margin-left:4px}
-main{padding:12px 16px;display:grid;gap:12px;grid-template-columns:1fr;max-width:1200px;margin:0 auto}
+main{padding:20px 16px;display:grid;gap:16px;grid-template-columns:minmax(0,1fr);max-width:1280px;margin:0 auto}
 @media (min-width:900px){main{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.metric{padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.metric span{display:block;color:var(--mute);font-size:12px}.metric strong{display:block;font-size:32px;font-variant-numeric:tabular-nums;margin-top:8px}
+.metric:nth-child(3) strong,.metric:nth-child(4) strong{color:var(--bad)}
+.globe-panel{background:radial-gradient(ellipse at center,#142b45,var(--card) 75%);text-align:center}
+.globe-panel h2{text-align:left}#globe{max-width:680px;margin:auto}
+.service{flex:1 1 150px;padding:10px 12px;border-left:4px solid currentColor;background:#080f1a;border-radius:4px}
+.status-detail{flex-basis:100%;font-size:12px}
+#recent{max-height:300px;overflow:auto}.fresh{animation:arrival .65s ease-out}
+@keyframes arrival{from{transform:translateY(-12px);background:#1d4357}to{transform:translateY(0);background:transparent}}
+@media(max-width:600px){main{padding:12px 10px;gap:12px}.summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric strong{font-size:28px}header{padding:14px}.globe-panel{padding:10px 4px}}
+@media(prefers-reduced-motion:reduce){.fresh{animation:none}}
 h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transform:none}
 .stat{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.info{color:var(--info)}.mute{color:var(--mute)}
@@ -819,12 +844,19 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <header><h1>ExitGuard<span id="demo" class="badge" hidden>DEMO</span></h1>
 <span class="sub" id="host">…</span><span class="sub" id="when"></span></header>
 <main>
-<section class="wide"><h2>목적지 지구본</h2><svg id="globe" viewBox="0 0 960 480" style="width:100%;display:block" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
+<div class="summary wide" aria-label="네트워크 요약">
+<div class="metric"><span>연결 기기</span><strong id="count-clients">—</strong></div>
+<div class="metric"><span>목적지</span><strong id="count-dests">—</strong></div>
+<div class="metric"><span>차단</span><strong id="count-blocked">—</strong></div>
+<div class="metric"><span>위험 알림 · 24h</span><strong id="count-risk">—</strong></div>
+</div>
+<section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
+<section class="wide"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent"></div></section>
 <section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
 <section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
 <section><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts"></div></section>
 <section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
-<section><h2>실시간 접속지 (SNI / DNS / HTTP)</h2><div id="recent"></div></section>
+<section><h2>프로토콜 비율 · 최근 5분</h2><svg id="donut" class="chart" aria-label="프로토콜별 트래픽 비율"></svg></section>
 </main>
 <footer>읽기 전용 · 2초마다 갱신 · <span id="err"></span></footer>
 <script src="static/viz.js"></script>
@@ -832,9 +864,10 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 "use strict";
 const $ = id => document.getElementById(id);
 let globe = null, latestGeo = null, centered = false;
+let recentKeys = null, mapFailed = false;
 function updateGlobe(){
   if(!latestGeo) return;
-  $("geo-empty").hidden = !!(latestGeo.home && latestGeo.points && latestGeo.points.length);
+  $("geo-empty").hidden = !mapFailed && !!(latestGeo.home && latestGeo.points && latestGeo.points.length);
   if(!globe) return;
   globe.update(latestGeo);
   if(!centered){globe.center(); centered = true;}
@@ -843,9 +876,9 @@ fetch("static/countries-110m.json").then(r => {
   if(!r.ok) throw new Error("지도 로드 실패");
   return r.json();
 }).then(topo => {
-  globe = EGViz.globe($("globe"), topo, {width:960, height:480});
+  globe = EGViz.globe($("globe"), topo, {width:600, height:520});
   updateGlobe();
-}).catch(() => {$("geo-empty").textContent = "지도를 불러올 수 없습니다.";});
+}).catch(() => {mapFailed = true; $("geo-empty").hidden = false; $("geo-empty").textContent = "지도를 불러올 수 없습니다.";});
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=String(text); return e;}
 const LV = {CRITICAL:"bad",HIGH:"bad",MEDIUM:"warn",LOW:"info",INFO:"mute"};
 function fill(box, items, render, emptyText){
@@ -857,15 +890,19 @@ function hms(iso){return iso ? String(iso).slice(11,19) : "";}
 function render(s){
   latestGeo = s.geo || {home:null, points:[]};
   updateGlobe();
+  $("count-clients").textContent = s.clients.length.toLocaleString();
+  $("count-dests").textContent = (latestGeo.points || []).length.toLocaleString();
+  $("count-blocked").textContent = s.blocked.toLocaleString();
+  $("count-risk").textContent = (s.alerts_24h.CRITICAL + s.alerts_24h.HIGH).toLocaleString();
   $("demo").hidden = !s.demo;
   $("host").textContent = s.host + " · exit node: " + (s.exit_node_approved ? "승인됨" : "미승인/미광고");
   $("when").textContent = hms(s.generated);
   const st = $("status"); st.replaceChildren();
   for(const [name, v] of Object.entries(s.services)){
-    st.append(el("span", v==="active" ? "ok" : "bad", (v==="active" ? "● " : "✖ ") + name));
+    st.append(el("span", "service " + (v==="active" ? "ok" : "bad"), (v==="active" ? "● " : "✖ ") + name + " · " + v));
   }
   const c = s.capture;
-  st.append(el("span", c.drop_pct > 1 ? "bad" : "", "캡처 " + c.packets.toLocaleString() + " pkt · 드롭 " + c.drops.toLocaleString() + " (" + c.drop_pct.toFixed(2) + "%)"));
+  st.append(el("span", "status-detail " + (c.drop_pct > 1 ? "bad" : "mute"), "캡처 " + c.packets.toLocaleString() + " pkt · 드롭 " + c.drops.toLocaleString() + " (" + c.drop_pct.toFixed(2) + "%)"));
   const a = s.alerts_24h;
   st.append(el("span", (a.CRITICAL + a.HIGH) ? "bad" : a.MEDIUM ? "warn" : "", "24h 알림 C" + a.CRITICAL + " H" + a.HIGH + " M" + a.MEDIUM + " L" + a.LOW));
   st.append(el("span", s.quarantined ? "bad" : "", s.nft_visible ? ("차단 " + s.blocked + " · 격리 " + s.quarantined) : "차단/격리: root 필요"));
@@ -882,6 +919,7 @@ function render(s){
 
   EGViz.levelBars($("bars"), s.alerts_24h);
   EGViz.line($("traffic"), s.series);
+  EGViz.donut($("donut"), s.protos);
   EGViz.alertGroups($("alerts"), s.alert_groups);
 
   fill($("dests"), s.top_dests, x => {
@@ -891,12 +929,15 @@ function render(s){
     return d;
   }, "최근 2분 트래픽 없음");
 
-  fill($("recent"), s.recent, x => {
-    const d = el("div","row");
+  const ordered = [...s.recent].sort((a,b) => String(b.ts).localeCompare(String(a.ts)));
+  const key = x => JSON.stringify([x.ts, x.client, x.label]);
+  fill($("recent"), ordered, x => {
+    const d = el("div","row" + (recentKeys && !recentKeys.has(key(x)) ? " fresh" : ""));
     d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
     d.append(el("div","main mono", x.label));
     return d;
   }, "아직 없음");
+  recentKeys = new Set(ordered.map(key));
 }
 async function tick(){
   try{
