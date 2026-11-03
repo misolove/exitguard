@@ -814,6 +814,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <header><h1>ExitGuard<span id="demo" class="badge" hidden>DEMO</span></h1>
 <span class="sub" id="host">…</span><span class="sub" id="when"></span></header>
 <main>
+<section class="wide"><h2>목적지 지구본</h2><svg id="globe" viewBox="0 0 960 480" style="width:100%;display:block" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
 <section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
 <section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div></section>
 <section><h2>알림 (최신순)</h2><div id="alerts"></div></section>
@@ -821,9 +822,25 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <section><h2>실시간 접속지 (SNI / DNS / HTTP)</h2><div id="recent"></div></section>
 </main>
 <footer>읽기 전용 · 2초마다 갱신 · <span id="err"></span></footer>
+<script src="static/viz.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+let globe = null, latestGeo = null, centered = false;
+function updateGlobe(){
+  if(!latestGeo) return;
+  $("geo-empty").hidden = !!(latestGeo.home && latestGeo.points && latestGeo.points.length);
+  if(!globe) return;
+  globe.update(latestGeo);
+  if(!centered){globe.center(); centered = true;}
+}
+fetch("static/countries-110m.json").then(r => {
+  if(!r.ok) throw new Error("지도 로드 실패");
+  return r.json();
+}).then(topo => {
+  globe = EGViz.globe($("globe"), topo, {width:960, height:480});
+  updateGlobe();
+}).catch(() => {$("geo-empty").textContent = "지도를 불러올 수 없습니다.";});
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=String(text); return e;}
 const LV = {CRITICAL:"bad",HIGH:"bad",MEDIUM:"warn",LOW:"info",INFO:"mute"};
 function fill(box, items, render, emptyText){
@@ -833,6 +850,8 @@ function fill(box, items, render, emptyText){
 }
 function hms(iso){return iso ? String(iso).slice(11,19) : "";}
 function render(s){
+  latestGeo = s.geo || {home:null, points:[]};
+  updateGlobe();
   $("demo").hidden = !s.demo;
   $("host").textContent = s.host + " · exit node: " + (s.exit_node_approved ? "승인됨" : "미승인/미광고");
   $("when").textContent = hms(s.generated);
