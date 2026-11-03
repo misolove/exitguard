@@ -11,8 +11,12 @@ Environment=EXITGUARD_WEB_PORT=8080
 ExecStart=/bin/sh -c 'ip=$$(tailscale ip -4 2>/dev/null | head -n1); case "$$ip" in 100.*) exec /usr/bin/python3 /usr/local/lib/exitguard/dash.py --web --host "$$ip" --port ${EXITGUARD_WEB_PORT};; *) echo "tailnet IPv4 address not available" >&2; exit 1;; esac'
 Restart=always
 RestartSec=5
-# 조회만 하므로 권한 없는 임시 사용자로 실행 (nft 차단 목록은 보이지 않음)
-DynamicUser=yes
+# 조회만 하므로 권한 없는 전용 시스템 사용자로 실행 (nft 차단 목록은 보이지 않음).
+# DynamicUser 는 쓰지 않는다: 이 환경의 D-Bus 가 임시 사용자 연결을 끊어 systemctl 로 서비스 상태를 못 읽었다
+User=exitguard-web
+Group=exitguard-web
+RestrictSUIDSGID=yes
+RemoveIPC=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict

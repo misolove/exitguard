@@ -22,6 +22,7 @@ restart_watch=0
 for f in watch.py common.py; do cmp -s "$S/exitguard/$f" "$L/$f" || restart_watch=1; done
 install -m 755 "$S"/exitguard/*.py "$S"/exitguard/rules-update.sh "$S"/exitguard/geoip-update.sh "$L/"
 install -d "$L/static" && install -m 644 "$S"/exitguard/static/* "$L/static/"
+id -u exitguard-web >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin exitguard-web
 install -m 644 "$S"/systemd/exitguard-web.service "$S"/systemd/exitguard-geoip.service "$S"/systemd/exitguard-geoip.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable exitguard-web.service >/dev/null 2>&1

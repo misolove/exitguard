@@ -48,6 +48,8 @@ install -d /usr/local/lib/exitguard/static && install -m 644 "$SRC"/exitguard/st
 install -m 755 "$SRC/bin/exitguardctl" /usr/local/bin/exitguardctl
 ln -sf /usr/local/lib/exitguard/dash.py /usr/local/bin/exitguard-top
 install -m 644 "$SRC"/systemd/*.service "$SRC"/systemd/*.timer /etc/systemd/system/
+# 웹 대시보드(exitguard-web.service, 선택) 전용 시스템 사용자
+id -u exitguard-web >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin exitguard-web
 
 step "4/8 nftables 차단 테이블 로드"
 if nft -f /etc/exitguard/nftables-exitguard.conf; then

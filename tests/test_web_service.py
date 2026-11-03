@@ -20,8 +20,10 @@ class WebServiceUnitTest(unittest.TestCase):
         self.assertNotIn("--demo", self.exec)
 
     def test_unprivileged(self):
-        for line in ("DynamicUser=yes", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "ProtectSystem=strict"):
+        for line in ("User=exitguard-web", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "ProtectSystem=strict"):
             self.assertIn(line + "\n", self.unit)
+        # DynamicUser 는 D-Bus 연결이 끊겨 systemctl 상태 조회가 안 됐다 (2026-11-04)
+        self.assertNotIn("\nDynamicUser=", self.unit)
 
 
 class GeoIPTimerTest(unittest.TestCase):
