@@ -5,7 +5,7 @@ import collections, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
 from urllib.parse import urlsplit
 
-import geoip
+import geoip, ids_health
 
 CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
@@ -393,7 +393,9 @@ class DemoModel(Model):
         self.ts_peers = {ip: {"HostName": n, "TailscaleIPs": [ip], "CurAddr": "x" if i != 2 else "", "Relay": "tok"}
                          for i, (ip, n) in enumerate(self.CLIENTS.items())}
         self.services = {s: "active" for s in ("suricata", "exitguard-watch", "exitguard-nft", "tailscaled")}
-        self.stats = {"capture": {"kernel_packets": 0, "kernel_drops": 0}, "uptime": 0}
+        self.stats = {"capture": {"kernel_packets": 0, "kernel_drops": 0}, "uptime": 0,
+                      "detect": {"engines": [{"last_reload": datetime.fromtimestamp(time.time() - 3600).isoformat(),
+                                              "rules_loaded": 53363, "rules_failed": 0}]}}
         self.totals = {ip: 0 for ip in self.CLIENTS}
         self.t0 = time.time()
         now = time.time()
@@ -496,6 +498,35 @@ def slack_status():
         return {"state": "unknown", "min_level": "UNKNOWN"}
 
 
+QUIET_SIG_S = 12 * 3600   # 이 시간 넘게 시그니처 탐지가 없으면 "탐지 중단 가능성" 경고
+
+
+def detection_health(m, now):
+    """탐지가 실제로 돌고 있는지. 알림 0건이 '안전'인지 '탐지 불가'인지 구분하려는 지표.
+    state: ok / warn(오래 조용함·정보 없음) / bad(규칙 적재 이상·HOME_NET 이 tailnet 아님)."""
+    last = None
+    for a in m.alerts:
+        if a.get("kind") == "ids-alert":
+            try:
+                last = max(last or 0, datetime.fromisoformat(a["ts"]).timestamp())
+            except (KeyError, ValueError, TypeError):
+                pass
+    engines = ((m.stats.get("detect") or {}).get("engines") or [{}])
+    eng = engines[0] if isinstance(engines[0], dict) else {}
+    loaded, failed = eng.get("rules_loaded"), eng.get("rules_failed")
+    home = None if DEMO else ids_health.yaml_home_net()
+    home_ok = None if home is None else ids_health.TAILNET in home
+    if home_ok is False or (loaded is not None and (loaded < ids_health.MIN_RULES or failed)):
+        state = "bad"
+    elif last is None or now - last > QUIET_SIG_S or loaded is None:
+        state = "warn"
+    else:
+        state = "ok"
+    return {"state": state, "last_signature": datetime.fromtimestamp(last).isoformat(timespec="seconds") if last else None,
+            "age_s": int(now - last) if last else None, "rules_loaded": loaded, "rules_failed": failed,
+            "last_reload": eng.get("last_reload"), "home_net_ok": home_ok}
+
+
 def snapshot(m):
     """Model 상태를 JSON 직렬화 가능한 dict 로. 웹 대시보드 /api/snapshot 응답."""
     now = time.time(); day = now - 86400
@@ -528,6 +559,7 @@ def snapshot(m):
                     "uptime_s": m.stats.get("uptime", 0)},
         "alerts_24h": {lv: cnt[lv] for lv in ("CRITICAL", "HIGH", "MEDIUM", "LOW")},
         "nft_visible": IS_ROOT or DEMO,
+        "detection": detection_health(m, now),
         "blocked": len(m.nft["blocked"]), "quarantined": len(m.nft["quar"]),
         "destination_count": len({ext for ts, c, ext, port, proto, b, app in m.flows if now - ts <= 120}),
         "attention_dests": [
