@@ -71,6 +71,10 @@ SUR
 # Debian 기본 unit 이 ExecStartPre/ReloadPropagatedFrom 등을 쓰더라도 위 ExecStart 만 교체됨
 sed -i 's/^\(\s*\)- interface: eth0/\1- interface: '"$IFACE"'/' /etc/suricata/suricata.yaml
 sed -i -E 's/^(\s*#?\s*community-id:).*/\1 true/' /etc/suricata/suricata.yaml
+# HOME_NET 은 suricata.yaml 에도 기록한다. 시작 옵션(--set)만 쓰면 규칙 재적재(USR2) 뒤 YAML 값(사설망)으로 돌아가
+# tailnet 트래픽이 $HOME_NET 에 맞지 않아 ET·local.rules 대부분이 걸리지 않는다 (2026-11-02 실제 발생)
+sed -i -E 's|^(\s*)HOME_NET: .*|\1HOME_NET: "'"$HOME_NET"'"|' /etc/suricata/suricata.yaml
+chown root:root /etc/suricata/suricata.yaml && chmod 644 /etc/suricata/suricata.yaml   # IDS 설정은 root 만 수정
 
 step "6/8 Suricata 룰 다운로드 (ET Open) + ExitGuard 룰 병합"
 suricata-update update-sources -q 2>/dev/null || true
