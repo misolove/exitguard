@@ -189,15 +189,15 @@ python3 exitguard/dash.py --demo --web       # 설치 없이 데모 데이터로
 - 웹 화면 지구본 아래에 출처 "IP Geolocation by DB-IP" 를 표시한다 (라이선스 조건)
 
 ```bash
-sudo install -d /var/lib/exitguard
-sudo curl -fL -o /var/lib/exitguard/dbip-country-lite.csv.gz \
-  "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).csv.gz"
+sudo /usr/local/lib/exitguard/geoip-update.sh        # 받기 (검증 후 교체, 이번 달 파일이 없으면 지난달)
+sudo systemctl enable --now exitguard-geoip.timer    # 매달 3일 05시 무렵 자동 갱신 (bin/deploy.sh 는 파일이 있으면 자동으로 켬)
 # 집(지구본의 출발점) 위치. 비밀값이 아니므로 0644 (웹 서비스가 권한 없이 읽는다). 도시 수준이면 충분
 echo '{"home": {"lat": 37.57, "lon": 126.98, "city": "Seoul"}}' | sudo tee /etc/exitguard/geo.json
 ```
 
 - 설정 파일 `/etc/exitguard/geo.json`: `{"db": "<경로>", "home": {"lat", "lon", "city"}}`. `db` 기본값은 위 경로, `home` 은 기본값 없음 (없으면 지구본을 그리지 않음)
 - DB 파일이 바뀌면 1분 안에 다시 읽는다 (재시작 불필요). 메모리는 약 100MB 늘어난다
+- 갱신(`exitguard-geoip.service`)은 `/var/lib/exitguard` 에만 쓸 수 있게 제한된다. 다운로드·압축·행 수 검증에 실패하면 기존 파일을 유지한다
 - 트래픽 상위 60개 목적지 + 차단 목적지만 점으로 그린다
 
 ### 상시 서비스 (`exitguard-web.service`)
