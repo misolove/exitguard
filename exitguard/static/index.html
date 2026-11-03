@@ -66,7 +66,7 @@ main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" 
 <div class="metric"><span>차단</span><strong id="count-blocked">—</strong></div>
 <div class="metric"><span>위험 알림 · 24h</span><strong id="count-risk">—</strong></div>
 </div>
-<section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">마우스 드래그·휠 확대 · 터치: 가로 회전, 세로 페이지 스크롤 · 상세 정보는 주의 목적지 목록에서도 확인</p></section>
+<section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p id="geo-src" class="mute" hidden>위치는 나라 단위(국가 중심 좌표)이며 실제 위치가 아닙니다 · IP Geolocation by DB-IP (db-ip.com, CC BY 4.0)</p><p class="mute">마우스 드래그·휠 확대 · 터치: 가로 회전, 세로 페이지 스크롤 · 상세 정보는 주의 목적지 목록에서도 확인</p></section>
 <section class="recent-panel"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent" tabindex="0" role="region" aria-label="실시간 접속 목록"></div></section>
 <section class="status-panel"><h2>상태</h2><div class="stat" id="status"></div></section>
 <section class="slack-panel"><h2>Slack 이상징후 알림</h2><p id="slack-status" role="status"></p>
@@ -103,6 +103,9 @@ health(); setInterval(health, 1000);
 function updateGlobe(){
   if(!latestGeo) return;
   $("geo-empty").hidden = !mapFailed && !!(latestGeo.home && latestGeo.points && latestGeo.points.length);
+  $("geo-src").hidden = !latestGeo.source;
+  if(!mapFailed) $("geo-empty").textContent = latestGeo.source && !latestGeo.home ?
+    "집 위치(geo.json 의 home)가 없어 지구본에 표시하지 않습니다" : "위치 정보 없음";
   if(!globe) return;
   globe.update(latestGeo);
   if(!centered){globe.center(); centered = true;}
