@@ -829,20 +829,25 @@ header{background:var(--hdr);color:#fff;padding:18px 24px;display:flex;flex-wrap
 header h1{font-size:17px;margin:0}
 header .sub{opacity:.85;font-size:13px}
 .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;background:#ffffff30;margin-left:4px}
-main{padding:20px 16px;display:grid;gap:16px;grid-template-columns:minmax(0,1fr);max-width:1280px;margin:0 auto}
-@media (min-width:900px){main{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
+main{padding:clamp(10px,1.5vw,28px);display:grid;gap:clamp(12px,1.2vw,24px);grid-template-columns:minmax(0,1fr);grid-template-areas:"summary" "globe" "recent" "alerts" "clients" "dests" "protocols" "status" "slack";max-width:2400px;margin:0 auto}
+.summary{grid-area:summary}.globe-panel{grid-area:globe}.recent-panel{grid-area:recent}.alerts-panel{grid-area:alerts}.clients-panel{grid-area:clients}.dests-panel{grid-area:dests}.protocols-panel{grid-area:protocols}.status-panel{grid-area:status}.slack-panel{grid-area:slack}
+@media(min-width:760px){main{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"summary summary" "globe globe" "recent alerts" "clients clients" "dests protocols" "status status" "slack slack"}}
+@media(min-width:1200px){main{grid-template-columns:minmax(0,1.55fr) minmax(360px,1fr);grid-template-areas:"summary summary" "globe recent" "globe alerts" "clients clients" "dests protocols" "status status" "slack slack"}.globe-panel{display:flex;flex-direction:column;justify-content:center}.globe-panel h2{align-self:stretch}#recent{max-height:220px}#alerts{max-height:260px;overflow:auto}.clients-panel #clients{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.clients-panel #clients .row{border-top:0}.clients-panel #traffic{max-width:1200px;margin:auto}}
+header>*{min-width:0;overflow-wrap:anywhere}section,p,.metric{overflow-wrap:anywhere}main>*{min-width:0}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
 .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .metric{padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
 .metric span{display:block;color:var(--mute);font-size:12px}.metric strong{display:block;font-size:32px;font-variant-numeric:tabular-nums;margin-top:8px}
 .metric:nth-child(3) strong,.metric:nth-child(4) strong{color:var(--bad)}
 .globe-panel{background:radial-gradient(ellipse at center,#142b45,var(--card) 75%);text-align:center}
-.globe-panel h2{text-align:left}#globe{max-width:680px;margin:auto}
+.globe-panel h2{text-align:left}#globe{width:100%;max-width:980px;margin:auto;max-height:75vh;min-height:220px}
+#traffic{margin-top:12px}#donut{max-width:600px;margin:auto}
 .service{flex:1 1 150px;padding:10px 12px;border-left:4px solid currentColor;background:#080f1a;border-radius:4px}
 .status-detail{flex-basis:100%;font-size:12px}
 .slack-guide summary{cursor:pointer;display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg)}
 .slack-guide li{margin:8px 0}.slack-guide code{overflow-wrap:anywhere}
 #recent{max-height:300px;overflow:auto}.fresh{animation:arrival .65s ease-out}
+#recent,#alerts{scrollbar-gutter:stable}
 @keyframes arrival{from{transform:translateY(-12px);background:#1d4357}to{transform:translateY(0);background:transparent}}
 @media(max-width:600px){main{padding:12px 10px;gap:12px}.summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric strong{font-size:28px}header{padding:14px}.globe-panel{padding:10px 4px}}
 @media(prefers-reduced-motion:reduce){.fresh{animation:none}}
@@ -873,9 +878,9 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <div class="metric"><span>위험 알림 · 24h</span><strong id="count-risk">—</strong></div>
 </div>
 <section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
-<section class="wide"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent"></div></section>
-<section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
-<section class="wide"><h2>Slack 이상징후 알림</h2><p id="slack-status" role="status"></p>
+<section class="recent-panel"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent" tabindex="0" role="region" aria-label="실시간 접속 목록"></div></section>
+<section class="status-panel"><h2>상태</h2><div class="stat" id="status"></div></section>
+<section class="slack-panel"><h2>Slack 이상징후 알림</h2><p id="slack-status" role="status"></p>
 <details class="slack-guide"><summary>Slack 설정 안내</summary>
 <ol><li>Slack에서 알림을 받을 채널용 Incoming Webhook을 만드세요. 워크스페이스 관리자 승인이 필요할 수 있습니다.</li>
 <li>서버의 <code>/etc/exitguard/config.json</code> (또는 <code>EXITGUARD_CONFIG</code> 지정 파일)에서 기존 설정을 유지한 채 <code>notify.webhook_url</code>에 webhook을 저장하세요. 주소는 비밀 값입니다. 채팅·브라우저·Git에 붙여 넣지 말고 서버의 보안 편집 경로를 사용하세요.</li>
@@ -884,10 +889,10 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <p>알림에는 기기·목적지 IP, 이벤트 제목 및 상세 정보가 포함될 수 있고 Slack으로 전송됩니다. 채널 접근 권한과 외부 전송 정책을 먼저 확인하세요.</p>
 <p>이 화면은 설정을 저장하거나 메시지를 보내지 않습니다. 알림은 감시 서비스가 전송하므로 브라우저를 닫아도 동작합니다. 실제 수신 여부는 Slack 채널에서 확인하세요.</p>
 </details></section>
-<section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
-<section><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts"></div></section>
-<section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
-<section><h2>프로토콜 비율 · 최근 5분</h2><svg id="donut" class="chart" aria-label="프로토콜별 트래픽 비율"></svg></section>
+<section class="clients-panel"><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
+<section class="alerts-panel"><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts" tabindex="0" role="region" aria-label="알림 묶음 목록"></div></section>
+<section class="dests-panel"><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
+<section class="protocols-panel"><h2>프로토콜 비율 · 최근 5분</h2><svg id="donut" class="chart" aria-label="프로토콜별 트래픽 비율"></svg></section>
 </main>
 <footer>읽기 전용 · 2초마다 갱신 · <span id="err"></span></footer>
 <script src="static/viz.js"></script>
