@@ -24,5 +24,23 @@ class WebServiceUnitTest(unittest.TestCase):
             self.assertIn(line + "\n", self.unit)
 
 
+class GeoIPTimerTest(unittest.TestCase):
+    def read(self, name):
+        with open(os.path.join(ROOT, *name.split("/")), encoding="utf-8") as f:
+            return f.read()
+
+    def test_monthly_and_confined(self):
+        timer = self.read("systemd/exitguard-geoip.timer")
+        self.assertIn("OnCalendar=*-*-03 ", timer)
+        self.assertIn("Persistent=true", timer)
+        unit = self.read("systemd/exitguard-geoip.service")
+        self.assertIn("ProtectSystem=strict\n", unit)
+        self.assertIn("ReadWritePaths=/var/lib/exitguard\n", unit)
+        script = self.read("exitguard/geoip-update.sh")
+        self.assertIn("https://download.db-ip.com/free/", script)
+        self.assertIn('gzip -t "$TMP"', script)
+        self.assertIn('mv "$TMP" "$DB"', script)
+
+
 if __name__ == "__main__":
     unittest.main()
