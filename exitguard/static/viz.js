@@ -265,7 +265,9 @@
       grad.append(s("stop", { offset: "0%", "stop-color": "#1d3557" }), s("stop", { offset: "100%", "stop-color": "#0b1526" }));
       defs.append(cp, grad);
       svg.append(defs);
-      const root = s("g", { "clip-path": `url(#${clip})` });
+      // 매 프레임 다시 그리는 요소는 포인터를 받지 않는다: 이벤트 대상이 사라지면 Safari 핀치가 중간에 끊긴다.
+      // 툴팁·드래그는 svg 자체와 좌표로 처리하므로 영향 없음
+      const root = s("g", { "clip-path": `url(#${clip})`, "pointer-events": "none" });
       svg.append(root);
       root.append(s("circle", { cx: W / 2, cy: H / 2, r: R, fill: `url(#${clip}sea)` }));
 
@@ -362,11 +364,20 @@
       if (!e.ctrlKey) return;
       e.preventDefault(); state.zoom = clampZoom(state.zoom * Math.exp(-e.deltaY * 0.01)); redraw();
     }, { passive: false });
-    // Safari(macOS)는 핀치를 gesture 이벤트로 보낸다
+    // Safari(macOS)는 핀치를 gesture 이벤트로 보내고, SVG 가 아니라 문서(window)로만 보내기도 한다.
+    // window 에서 받아 손가락 위치가 지구본 위일 때만 확대하고, 그 밖에서는 브라우저 기본 동작(페이지 확대)을 둔다.
     let gesture0 = null;
-    svg.addEventListener("gesturestart", e => { e.preventDefault(); gesture0 = state.zoom; });
-    svg.addEventListener("gesturechange", e => { e.preventDefault(); if (gesture0 !== null) { state.zoom = clampZoom(gesture0 * e.scale); redraw(); } });
-    svg.addEventListener("gestureend", e => { e.preventDefault(); gesture0 = null; });
+    const overGlobe = e => {
+      if (e.target instanceof Node && svg.contains(e.target)) return true;
+      const r = svg.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    };
+    window.addEventListener("gesturestart", e => { if (!overGlobe(e)) return; e.preventDefault(); gesture0 = state.zoom; }, { passive: false });
+    window.addEventListener("gesturechange", e => {
+      if (gesture0 === null) return;
+      e.preventDefault(); state.zoom = clampZoom(gesture0 * e.scale); redraw();
+    }, { passive: false });
+    window.addEventListener("gestureend", e => { if (gesture0 === null) return; e.preventDefault(); gesture0 = null; }, { passive: false });
     svg.addEventListener("dblclick", () => { api.center(); });
 
     const api = {
