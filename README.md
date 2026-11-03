@@ -181,6 +181,25 @@ python3 exitguard/dash.py --demo --web       # 설치 없이 데모 데이터로
 > `sudo tailscale serve --bg 8080` → tailnet 안의 기기에서만 `https://<이 머신>.<tailnet>.ts.net/` 로 접속.
 > `tailscale funnel` 은 공개 인터넷 노출이므로 쓰지 않는다.
 
+### 지구본에 실제 목적지 표시 (오프라인 GeoIP, 선택)
+
+실제 모드의 지구본은 오프라인 IP→국가 DB 가 있을 때만 그려진다. 실행 중 외부 조회는 하지 않는다.
+- 데이터: [DB-IP IP to Country Lite](https://db-ip.com/db/download/ip-to-country-lite) (무료, 매월 갱신, **CC BY 4.0**). 레포에는 넣지 않는다
+- 위치는 **나라 단위**(국가 중심 좌표, `exitguard/geoip.py` 의 직접 작성 표)이며 IP 의 실제 위치가 아니다
+- 웹 화면 지구본 아래에 출처 "IP Geolocation by DB-IP" 를 표시한다 (라이선스 조건)
+
+```bash
+sudo install -d /var/lib/exitguard
+sudo curl -fL -o /var/lib/exitguard/dbip-country-lite.csv.gz \
+  "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).csv.gz"
+# 집(지구본의 출발점) 위치. 비밀값이 아니므로 0644 (웹 서비스가 권한 없이 읽는다). 도시 수준이면 충분
+echo '{"home": {"lat": 37.57, "lon": 126.98, "city": "Seoul"}}' | sudo tee /etc/exitguard/geo.json
+```
+
+- 설정 파일 `/etc/exitguard/geo.json`: `{"db": "<경로>", "home": {"lat", "lon", "city"}}`. `db` 기본값은 위 경로, `home` 은 기본값 없음 (없으면 지구본을 그리지 않음)
+- DB 파일이 바뀌면 1분 안에 다시 읽는다 (재시작 불필요). 메모리는 약 100MB 늘어난다
+- 트래픽 상위 60개 목적지 + 차단 목적지만 점으로 그린다
+
 ### 상시 서비스 (`exitguard-web.service`)
 
 exit node 에서 웹 대시보드를 계속 띄워 두려면 `systemd/exitguard-web.service` 를 쓴다 (install.sh 는 켜지 않음, 선택).

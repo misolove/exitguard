@@ -5,6 +5,8 @@ import collections, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
 from urllib.parse import urlsplit
 
+import geoip
+
 CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
 ALERTS = "/var/log/exitguard/alerts.jsonl"
@@ -101,6 +103,8 @@ class Model:
         self._prev_nft = {}; self._prev_t = 0
         self.slow_t = 0
         self.msg = ""
+        self.hosts = collections.OrderedDict()          # 목적지 IP -> 최근 SNI/HTTP 호스트 (지구본 툴팁)
+        self._geo = {"db": None, "home": None, "mtime": None, "checked": 0, "cache": {}}
 
     # ---- eve.json 증분 읽기
     def _open(self):
@@ -164,9 +168,12 @@ class Model:
                 sni = (ev.get("tls") or ev.get("quic") or {}).get("sni")
                 if sni:
                     self.dests.append((ts, client, printable(f"{sni} [{t}]")))
+                    self._host(ext, sni)
             elif t == "http":
                 h = ev.get("http", {})
                 self.dests.append((ts, client, printable(f"{h.get('hostname','?')}{(h.get('url') or '')[:30]} [http]")))
+                if h.get("hostname"):
+                    self._host(ext, h["hostname"])
             elif t == "dns":
                 d = ev.get("dns", {})
                 if d.get("type") in ("query", "request"):
@@ -273,9 +280,56 @@ class Model:
         out.sort(key=lambda x: -(x["rate"] or 0) * 1e9 - x["bytes"])
         return out
 
-    def geo(self, win=120):
-        """목적지 좌표. 실제 모드는 아직 GeoIP 조회가 없어 비어 있다 (데모만 가짜 좌표)."""
-        return {"home": None, "points": []}
+    def _host(self, ip, name):
+        self.hosts[ip] = printable(name)[:80]; self.hosts.move_to_end(ip)
+        if len(self.hosts) > 2000:
+            self.hosts.popitem(last=False)
+
+    def _geodb(self):
+        """geo.json 과 GeoIP 파일을 1분마다 확인해 바뀌면 다시 읽는다. 파일이 없거나 깨졌으면 None (오류 아님)."""
+        g = self._geo
+        if time.time() - g["checked"] < 60:
+            return g["db"]
+        g["checked"] = time.time()
+        cfg = geoip.load_settings(); g["home"] = cfg["home"]
+        try:
+            mtime = os.stat(cfg["db"]).st_mtime
+        except OSError:
+            g["db"] = None; g["mtime"] = None
+            return None
+        if (cfg["db"], mtime) != g["mtime"]:
+            try:
+                g["db"] = geoip.GeoDB(cfg["db"])
+            except (OSError, ValueError, EOFError):
+                g["db"] = None
+            g["mtime"] = (cfg["db"], mtime); g["cache"] = {}
+        return g["db"]
+
+    def geo(self, win=120, n=60):
+        """목적지 좌표 = 오프라인 GeoIP 의 국가 중심 (실제 위치 아님). 트래픽 상위 n 개 + 차단 목적지.
+        GeoIP 파일이 없으면 비어 있다. home 은 geo.json 에 적은 값만 쓴다 (기본값 없음)."""
+        db = self._geodb()
+        if db is None:
+            return {"home": None, "points": []}
+        now = time.time(); agg = collections.Counter()
+        for ts, c, ext, port, proto, b, app in self.flows:
+            if now - ts <= win:
+                agg[ext] += b
+        cache = self._geo["cache"]
+        if len(cache) > 20000:
+            cache.clear()
+        pts = []
+        for ip in [ip for ip, _ in agg.most_common(n)] + [ip for ip in self.nft["blocked"] if ip not in agg]:
+            if ip not in cache:
+                cache[ip] = db.country(ip)
+            cc = cache[ip]
+            if cc not in geoip.COUNTRY:
+                continue
+            lat, lon, name = geoip.COUNTRY[cc]
+            pts.append({"ip": ip, "host": self.hosts.get(ip, ""), "city": name, "country": cc, "lat": lat, "lon": lon,
+                        "bytes": agg.get(ip, 0), "blocked": ip in self.nft["blocked"],
+                        "level": "HIGH" if ip in self.nft["blocked"] else None})
+        return {"home": self._geo["home"], "points": pts, "source": geoip.ATTRIBUTION}
 
     def series(self, step=10, n=60):
         """기기별 바이트를 step 초 칸 n 개로 묶는다 (가장 오래된 칸이 앞). 웹 선 그래프용."""
@@ -459,7 +513,7 @@ def snapshot(m):
         except Exception:
             pass
     geo = m.geo()
-    geo = {"home": geo.get("home"), "points": [dict(p) for p in geo.get("points", [])]}
+    geo = {"home": geo.get("home"), "points": [dict(p) for p in geo.get("points", [])], "source": geo.get("source")}
     for p in geo["points"]:
         alert = latest.get(p["ip"], (None, None))[1]
         p["last_alert"] = ({k: alert.get(k) for k in ("ts", "level", "title")} if alert else None)
