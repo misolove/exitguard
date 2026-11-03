@@ -65,6 +65,16 @@ python3 exitguard/dash.py --demo --web    # 웹 대시보드 → http://127.0.0.
 | `exitguardctl` | 상태/알림/수동 차단/격리/pcap 캡처 CLI |
 | `exitguard-top` | curses 대시보드. 원격 SSH 에서 한 화면으로 상태 파악, root 면 즉시 조치. `--web` 은 읽기 전용 브라우저 대시보드 |
 
+대시보드 코드는 데이터 엔진 하나에 화면 두 개(텍스트판·웹판)로 나뉜다. 데이터를 고치면 두 화면에 함께 반영된다.
+
+| 파일 | 내용 |
+|---|---|
+| `exitguard/core.py` | 데이터 엔진: 설정, 수집(`Model`/`DemoModel`), 집계(`snapshot` = `/api/snapshot`) |
+| `exitguard/tui.py` | 텍스트판: curses 화면(`exitguard-top`), `--text` |
+| `exitguard/web.py` | 웹판 서버: 읽기 전용 GET, CSP, 정해진 정적 파일만 응답 |
+| `exitguard/static/` | 웹판 화면: `index.html`, `viz.js`(지구본·차트), 지도 데이터 |
+| `exitguard/dash.py` | 진입점(`exitguard-top`). 옵션에 따라 텍스트판/웹판 실행 |
+
 ## 설치
 
 ```bash

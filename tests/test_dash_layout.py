@@ -25,7 +25,7 @@ import importlib.util, sys
 sys.argv = [sys.argv[1], "--demo"]
 spec = importlib.util.spec_from_file_location("dash", sys.argv[0])
 d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
-d.IS_ROOT = True
+d.core.IS_ROOT = True
 d.UI.action = lambda self, key: setattr(self.m, "msg", "테스트: 조치 비활성")
 d.main()
 """
@@ -184,7 +184,7 @@ class TestVirtualScreen(unittest.TestCase):
 
     def render(self, W, root, H=24, msg=""):
         d = self.d
-        d.IS_ROOT = root
+        d.core.IS_ROOT = root
         self.m.msg = msg
         ui = object.__new__(d.UI); ui.scr = FakeWin(d, H, W); ui.m = self.m; ui.interval = 2.0
         ui.draw()
