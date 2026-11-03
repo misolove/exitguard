@@ -357,7 +357,16 @@
       touchStart = null;
     };
     svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
-    svg.addEventListener("wheel", e => { e.preventDefault(); state.zoom = clampZoom(state.zoom * Math.exp(-e.deltaY * 0.0015)); redraw(); }, { passive: false });
+    // 트랙패드 핀치(브라우저가 ctrlKey 휠로 보냄)·Ctrl+휠만 확대. 두 손가락 쓸기·일반 휠은 페이지 스크롤로 둔다
+    svg.addEventListener("wheel", e => {
+      if (!e.ctrlKey) return;
+      e.preventDefault(); state.zoom = clampZoom(state.zoom * Math.exp(-e.deltaY * 0.01)); redraw();
+    }, { passive: false });
+    // Safari(macOS)는 핀치를 gesture 이벤트로 보낸다
+    let gesture0 = null;
+    svg.addEventListener("gesturestart", e => { e.preventDefault(); gesture0 = state.zoom; });
+    svg.addEventListener("gesturechange", e => { e.preventDefault(); if (gesture0 !== null) { state.zoom = clampZoom(gesture0 * e.scale); redraw(); } });
+    svg.addEventListener("gestureend", e => { e.preventDefault(); gesture0 = null; });
     svg.addEventListener("dblclick", () => { api.center(); });
 
     const api = {
