@@ -128,6 +128,14 @@ class WebDemoTest(unittest.TestCase):
         self.assertLess(html.index('id="globe"'), html.index('id="recent"'))
         self.assertIn("recentKeys", html)
 
+    def test_slack_guide_is_read_only_and_demo_is_disabled(self):
+        html = self.get("")[2].decode()
+        self.assertIn("<summary>Slack 설정 안내</summary>", html)
+        self.assertIn("전송 성공 미확인", html)
+        self.assertIn("notify.webhook_url", html)
+        snap = json.loads(self.get("api/snapshot")[2])
+        self.assertEqual(snap["slack"], {"state": "demo", "min_level": "MEDIUM"})
+
     def test_read_only(self):
         for method in ("POST", "PUT", "DELETE"):
             req = urllib.request.Request(self.base + "api/snapshot", data=b"{}", method=method)

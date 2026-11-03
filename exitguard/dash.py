@@ -8,6 +8,7 @@
 """
 import collections, curses, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
+from urllib.parse import urlsplit
 
 CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
@@ -743,6 +744,24 @@ def alert_groups(m, since, n=20):
     return out[:n]
 
 
+def slack_status():
+    """Configuration metadata only; never expose webhook URLs or claim delivery."""
+    if DEMO:
+        return {"state": "demo", "min_level": "MEDIUM"}
+    try:
+        with open(CFG_PATH) as f:
+            notify = json.load(f).get("notify", {})
+        url = notify.get("webhook_url") or ""
+        parsed = urlsplit(url)
+        slack = (parsed.scheme == "https" and parsed.hostname in ("hooks.slack.com", "hooks.slack-gov.com")
+                 and parsed.path.startswith("/services/") and not parsed.username and not parsed.password)
+        level = notify.get("min_level", "MEDIUM")
+        return {"state": "configured" if slack else "other" if url else "missing",
+                "min_level": level if level in LEVEL_RANK else "UNKNOWN"}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"state": "unknown", "min_level": "UNKNOWN"}
+
+
 def snapshot(m):
     """Model 상태를 JSON 직렬화 가능한 dict 로. 웹 대시보드 /api/snapshot 응답."""
     now = time.time(); day = now - 86400
@@ -767,6 +786,7 @@ def snapshot(m):
     return {
         "generated": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
         "demo": DEMO,
+        "slack": slack_status(),
         "host": m.ts_self.get("HostName") or os.uname().nodename,
         "exit_node_approved": bool(m.ts_self.get("ExitNodeOption")),
         "services": dict(m.services),
@@ -820,6 +840,8 @@ section{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 .globe-panel h2{text-align:left}#globe{max-width:680px;margin:auto}
 .service{flex:1 1 150px;padding:10px 12px;border-left:4px solid currentColor;background:#080f1a;border-radius:4px}
 .status-detail{flex-basis:100%;font-size:12px}
+.slack-guide summary{cursor:pointer;display:inline-block;padding:8px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg)}
+.slack-guide li{margin:8px 0}.slack-guide code{overflow-wrap:anywhere}
 #recent{max-height:300px;overflow:auto}.fresh{animation:arrival .65s ease-out}
 @keyframes arrival{from{transform:translateY(-12px);background:#1d4357}to{transform:translateY(0);background:transparent}}
 @media(max-width:600px){main{padding:12px 10px;gap:12px}.summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric strong{font-size:28px}header{padding:14px}.globe-panel{padding:10px 4px}}
@@ -853,6 +875,15 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 <section class="wide globe-panel"><h2>목적지 지구본 · NETWORK ACTIVITY</h2><svg id="globe" class="chart" aria-label="트래픽 목적지 지구본"></svg><p id="geo-empty" class="empty">위치 정보 없음</p><p class="mute">드래그 회전 · 휠/핀치 확대 · 더블클릭 원위치</p></section>
 <section class="wide"><h2>실시간 접속지 · 최신순 · SNI / DNS / HTTP</h2><div id="recent"></div></section>
 <section class="wide"><h2>상태</h2><div class="stat" id="status"></div></section>
+<section class="wide"><h2>Slack 이상징후 알림</h2><p id="slack-status" role="status"></p>
+<details class="slack-guide"><summary>Slack 설정 안내</summary>
+<ol><li>Slack에서 알림을 받을 채널용 Incoming Webhook을 만드세요. 워크스페이스 관리자 승인이 필요할 수 있습니다.</li>
+<li>서버의 <code>/etc/exitguard/config.json</code> (또는 <code>EXITGUARD_CONFIG</code> 지정 파일)에서 기존 설정을 유지한 채 <code>notify.webhook_url</code>에 webhook을 저장하세요. 주소는 비밀 값입니다. 채팅·브라우저·Git에 붙여 넣지 말고 서버의 보안 편집 경로를 사용하세요.</li>
+<li><code>notify.min_level</code>로 전송 기준을 선택하세요. 기본 MEDIUM 이상이며 HIGH로 올리면 높은 위험만 전송합니다. <code>notify.dedupe_sec</code>의 기본값은 600초입니다. 동일 알림이 반복되는 동안 중복 발송을 억제합니다.</li>
+<li>파일 접근 권한을 제한하고 <code>sudo systemctl restart exitguard-watch</code>로 감시 서비스를 재시작하세요. 설정됨 표시는 파일 설정만 확인하며, 서비스의 적용 여부나 전송 성공을 보장하지 않습니다.</li></ol>
+<p>알림에는 기기·목적지 IP, 이벤트 제목 및 상세 정보가 포함될 수 있고 Slack으로 전송됩니다. 채널 접근 권한과 외부 전송 정책을 먼저 확인하세요.</p>
+<p>이 화면은 설정을 저장하거나 메시지를 보내지 않습니다. 알림은 감시 서비스가 전송하므로 브라우저를 닫아도 동작합니다. 실제 수신 여부는 Slack 채널에서 확인하세요.</p>
+</details></section>
 <section><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
 <section><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>알림 묶음 (최신순)</h2><div id="alerts"></div></section>
 <section><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
@@ -888,6 +919,9 @@ function fill(box, items, render, emptyText){
 }
 function hms(iso){return iso ? String(iso).slice(11,19) : "";}
 function render(s){
+  const slack = s.slack || {state:"unknown", min_level:"UNKNOWN"};
+  const slackLabels = {demo:"데모 · Slack 발송 안 함", configured:"Slack webhook 설정됨 · 전송 성공 미확인", missing:"미설정", other:"다른 webhook 설정됨 · Slack 미확인", unknown:"설정 확인 불가 · 파일 또는 접근 권한 확인"};
+  $("slack-status").textContent = (slackLabels[slack.state] || slackLabels.unknown) + " · 알림 기준: " + slack.min_level;
   latestGeo = s.geo || {home:null, points:[]};
   updateGlobe();
   $("count-clients").textContent = s.clients.length.toLocaleString();
