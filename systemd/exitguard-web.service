@@ -1,0 +1,30 @@
+[Unit]
+Description=ExitGuard - read-only web dashboard (tailnet address only)
+After=network-online.target tailscaled.service
+Wants=tailscaled.service
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=EXITGUARD_WEB_PORT=8080
+# 인증이 없으므로 tailnet IPv4(100.x) 에만 연다. 주소를 못 얻으면 실패 후 재시도 (0.0.0.0 으로 열리는 일 없음)
+ExecStart=/bin/sh -c 'ip=$$(tailscale ip -4 2>/dev/null | head -n1); case "$$ip" in 100.*) exec /usr/bin/python3 /usr/local/lib/exitguard/dash.py --web --host "$$ip" --port ${EXITGUARD_WEB_PORT};; *) echo "tailnet IPv4 address not available" >&2; exit 1;; esac'
+Restart=always
+RestartSec=5
+# 조회만 하므로 권한 없는 임시 사용자로 실행 (nft 차단 목록은 보이지 않음)
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

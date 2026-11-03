@@ -181,6 +181,22 @@ python3 exitguard/dash.py --demo --web       # 설치 없이 데모 데이터로
 > `sudo tailscale serve --bg 8080` → tailnet 안의 기기에서만 `https://<이 머신>.<tailnet>.ts.net/` 로 접속.
 > `tailscale funnel` 은 공개 인터넷 노출이므로 쓰지 않는다.
 
+### 상시 서비스 (`exitguard-web.service`)
+
+exit node 에서 웹 대시보드를 계속 띄워 두려면 `systemd/exitguard-web.service` 를 쓴다 (install.sh 는 켜지 않음, 선택).
+- tailnet IPv4(`100.x`) 에만 바인딩한다. 주소를 못 얻으면 실패 후 재시도하며 `0.0.0.0` 으로 열리지 않는다.
+- 권한 없는 임시 사용자(`DynamicUser`)로 실행한다. 조회 전용이라 nft 차단 목록은 보이지 않는다.
+- tailnet 기기에서 `http://<exit node 이름>:8080/` 로 접속.
+
+개발 PC 에서 코드만 갱신할 때 (텍스트판·웹판·감시 코드, sudo 한 번):
+
+```bash
+bin/deploy.sh user@exit-node
+```
+
+기존 `/usr/local/lib/exitguard` 를 `/var/backups/exitguard/<시각>/` 에 백업한 뒤 설치하고 웹 서비스를 켠다/재시작한다.
+`watch.py`·`common.py` 가 바뀐 경우에만 `exitguard-watch` 도 재시작한다.
+
 
 ## 운용
 
