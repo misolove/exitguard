@@ -5,7 +5,7 @@ import collections, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
 from urllib.parse import urlsplit
 
-import geoip, ids_health
+import geoip, ids_health, slack_connect
 
 CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
@@ -552,6 +552,8 @@ def snapshot(m):
         "generated": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
         "demo": DEMO,
         "slack": slack_status(),
+        # 서버에서 slack-connect 가 대기 중일 때만 승인 주소 (웹 버튼용, 5분 뒤 만료)
+        "slack_connect": None if DEMO else slack_connect.read_pending(),
         "host": m.ts_self.get("HostName") or os.uname().nodename,
         "exit_node_approved": bool(m.ts_self.get("ExitNodeOption")),
         "services": dict(m.services),

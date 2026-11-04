@@ -11,7 +11,7 @@ set -eu
 DEST=$1
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 
-COPYFILE_DISABLE=1 tar -C "$SRC" --no-xattrs -czf - --exclude='__pycache__' exitguard systemd/exitguard-web.service systemd/exitguard-geoip.service systemd/exitguard-geoip.timer \
+COPYFILE_DISABLE=1 tar -C "$SRC" --no-xattrs -czf - --exclude='__pycache__' exitguard bin/exitguardctl systemd/exitguard-web.service systemd/exitguard-geoip.service systemd/exitguard-geoip.timer \
   | ssh "$DEST" 'rm -rf ~/exitguard-staging && mkdir -p ~/exitguard-staging && tar -C ~/exitguard-staging -xzf -'
 
 ssh -t "$DEST" 'sudo sh -eu -c '"'"'
@@ -22,6 +22,7 @@ restart_watch=0
 for f in watch.py common.py; do cmp -s "$S/exitguard/$f" "$L/$f" || restart_watch=1; done
 install -m 755 "$S"/exitguard/*.py "$S"/exitguard/rules-update.sh "$S"/exitguard/geoip-update.sh "$L/"
 install -d "$L/static" && install -m 644 "$S"/exitguard/static/* "$L/static/"
+install -m 755 "$S/bin/exitguardctl" /usr/local/bin/exitguardctl
 grep -q "^exitguard-web:" /etc/passwd || { systemctl stop exitguard-web.service 2>/dev/null || true; useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin exitguard-web; }
 install -m 644 "$S"/systemd/exitguard-web.service "$S"/systemd/exitguard-geoip.service "$S"/systemd/exitguard-geoip.timer /etc/systemd/system/
 systemctl daemon-reload
