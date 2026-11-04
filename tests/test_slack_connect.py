@@ -28,6 +28,8 @@ class SlackConnectTest(unittest.TestCase):
         self.assertEqual(m.netloc, "api.slack.com")
         manifest = json.loads(urllib.parse.parse_qs(m.query)["manifest_json"][0])
         self.assertEqual(manifest["oauth_config"], {"redirect_urls": [red], "scopes": {"bot": ["incoming-webhook"]}})
+        self.assertEqual(manifest["features"]["bot_user"]["display_name"], "ExitGuard")   # incoming-webhook 에 필요
+        self.assertIn("이상징후", manifest["display_information"]["description"])
 
     def test_callback_checks_state(self):
         self.assertEqual(self.sc.check_callback("code=abc&state=good", "good"), ("abc", None))

@@ -37,10 +37,12 @@ def redirect_uri(host):
 
 def manifest_url(redirect):
     """Slack 앱 만들기 화면을 설정이 채워진 채로 여는 링크 (incoming-webhook 권한 하나만)."""
+    # incoming-webhook 권한은 봇 사용자가 있어야 manifest 검증을 통과한다
     manifest = {"display_information": {"name": "ExitGuard", "description": "ExitGuard 이상징후 알림"},
+                "features": {"bot_user": {"display_name": "ExitGuard", "always_online": False}},
                 "oauth_config": {"redirect_urls": [redirect], "scopes": {"bot": ["incoming-webhook"]}},
                 "settings": {"org_deploy_enabled": False, "socket_mode_enabled": False, "token_rotation_enabled": False}}
-    return "https://api.slack.com/apps?new_app=1&manifest_json=" + urllib.parse.quote(json.dumps(manifest, separators=(",", ":")))
+    return "https://api.slack.com/apps?new_app=1&manifest_json=" + urllib.parse.quote(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")))
 
 
 def authorize_url(client_id, redirect, state):
