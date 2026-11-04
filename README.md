@@ -1,16 +1,44 @@
-# ExitGuard — Tailscale exit node 트래픽 감시/보고/차단
+# ExitGuard — 우리 집 인터넷 관제탑
 
+[![Live demo](https://img.shields.io/badge/live%20demo-exitguard.replit.app-F26207?logo=replit&logoColor=white)](https://exitguard.replit.app)
 [![test](https://github.com/misolove/exitguard/actions/workflows/test.yml/badge.svg)](https://github.com/misolove/exitguard/actions/workflows/test.yml)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)
 ![deps](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
 
 **집 서버 한 대를 가족 기기들의 인터넷 출구(Tailscale exit node)로 쓰면서, 그 출구를 지나는 모든 트래픽을
-감시하고, 의심 정황을 알리고, 필요하면 자동으로 차단·격리한다.**
+감시하고, 의심 정황을 알리고, 필요하면 자동으로 차단·격리한다.** 터미널로도, 지구본 대시보드로도 본다.
 
-![실제 운영 중인 exitguard-top 화면 (기기 이름·IP·접속 도메인은 가림)](docs/tui-live-masked.png)
+*A home-lab IDS for your Tailscale exit node — watch, alert and block every device's traffic, in your terminal or on a live globe.*
 
-<sub>실제 집 서버에서 돌고 있는 `exitguard-top` 화면. 기기 이름·IP·접속 도메인은 가렸다.</sub>
+### ▶ 설치 없이 바로 보기: **[exitguard.replit.app](https://exitguard.replit.app)**
+<sub>가짜 데이터로 도는 공개 데모. 실제 트래픽은 없고 아무것도 차단하지 않는다.</sub>
+
+## 화면 두 개, 엔진 하나
+
+| 🖥️ 텍스트 모드 — `exitguard-top` | 🌏 비주얼 모드 — `exitguard-top --web` |
+|---|---|
+| SSH 한 줄이면 어디서든. root 면 그 자리에서 **차단·격리** | 폰·노트북 브라우저로. **목적지 지구본**, 알림 묶음, 기기별 그래프 (읽기 전용) |
+| <img src="docs/tui-live-masked.png" alt="실제 운영 중인 exitguard-top 화면 (기기 이름·IP·접속 도메인은 가림)" width="480"> | <img src="docs/web-demo-desktop.png" alt="웹 대시보드 데모: 서울에서 각 목적지로 이어지는 지구본, 탐지 상태, 알림" width="480"> |
+| <sub>실제 집 서버 화면 (기기 이름·IP·도메인은 가림)</sub> | <sub>데모 데이터 ([라이브 데모](https://exitguard.replit.app))</sub> |
+
+두 화면은 같은 데이터 엔진(`core.py`)을 쓴다. 탐지를 고치면 두 화면에 함께 반영된다.
+
+## 왜 믿을 만한가
+
+- **의존성 0**: Python 표준 라이브러리만. `pip install` 도, 외부 CDN·지도 타일·폰트도 없다. 내 접속 기록이 대시보드를 통해 밖으로 새지 않는다
+- **"알림 0건" 을 그대로 믿지 않는다**: 화면이 *마지막 시그니처 탐지 시각·적재된 규칙 수·HOME_NET 설정* 을 함께 보여준다. 조용한 것인지 탐지가 멈춘 것인지 구분된다
+- **모르면 모른다고 표시**: 권한이 없어 못 읽은 값은 0 이 아니라 "확인 불가"
+- **웹은 읽기 전용**: GET 만, 엄격한 CSP, exit node 에서는 tailnet 주소에만 연다. 조치는 터미널에서만
+- **오프라인 지도**: 목적지 위치는 내려받아 둔 GeoIP(나라 단위)로만 계산. 실행 중 외부 조회 없음
+
+## 실제 운영에서 잡아낸 것들
+
+이 레포는 2026-10 부터 실제 집에서 돌고 있는 시스템의 공개본이다. 운영하면서 고친 것들이 그대로 들어 있다.
+
+- **IDS 가 이틀 동안 조용히 꺼져 있었다.** 매일 규칙을 재적재하면 Suricata 의 `HOME_NET` 이 기본값으로 돌아가 거의 모든 규칙이 빗나갔다. 화면은 "위험 알림 0" 이라 아무도 몰랐다 → 설정 고정, 재적재 후 자동 점검·HIGH 알림, 화면에 *탐지 건강* 표시 ([#17](https://github.com/misolove/exitguard/pull/17), [#18](https://github.com/misolove/exitguard/pull/18))
+- **네트워크에서 온 NUL 문자 하나에 대시보드가 죽었다.** QUIC SNI 끝에 붙은 `\x00` → 화면에 찍기 전 제어문자·방향 조작 문자 정화 (터미널 이스케이프 주입도 함께 차단) ([#10](https://github.com/misolove/exitguard/pull/10))
+- **트랙패드 핀치가 Safari 에서만 안 됐다.** 매 프레임 다시 그리는 SVG 요소가 제스처를 끊었다 ([#16](https://github.com/misolove/exitguard/pull/16))
 
 ## 한눈에
 
@@ -18,7 +46,7 @@
 |---|---|
 | **무엇을** | 가족 기기(폰·노트북·태블릿)가 어디와 통신하는지 한 곳에서 본다 |
 | **어떻게** | 트래픽을 Tailscale로 집 서버에 모으고 → Suricata IDS로 검사 → 위험하면 nftables로 차단 |
-| **보는 법** | SSH 터미널 대시보드 `exitguard-top`, 또는 폰 브라우저용 읽기 전용 웹 대시보드 `--web` |
+| **보는 법** | SSH 터미널 대시보드 `exitguard-top`, 또는 브라우저용 읽기 전용 웹 대시보드 `--web` |
 | **상태** | 2026-10 부터 실제 운영 중. 이 레포는 민감정보를 뺀 공개본 |
 
 ```mermaid
@@ -28,20 +56,22 @@ flowchart LR
   S -.패킷 사본.-> IDS["Suricata IDS"]
   IDS -->|eve.json| W["exitguard-watch<br/>알림 · 탐지"]
   W -->|위험 목적지 / 기기| N["nftables<br/>차단 · 격리"]
-  W --> T["exitguard-top<br/>터미널 · 웹 대시보드"]
+  W --> T["exitguard-top<br/>텍스트 · 비주얼 대시보드"]
 ```
 
 ## 30초 체험 (설치 없이)
 
-Python 3 만 있으면 된다. 가짜 트래픽으로 돌아가며 아무것도 차단하지 않는다.
+브라우저만 있으면: **[exitguard.replit.app](https://exitguard.replit.app)**. 내 컴퓨터에서 돌려 보려면 Python 3 만 있으면 된다. 가짜 트래픽으로 돌아가며 아무것도 차단하지 않는다.
 
 ```bash
 git clone https://github.com/misolove/exitguard && cd exitguard
-python3 exitguard/dash.py --demo          # 터미널 대시보드 (q 종료)
-python3 exitguard/dash.py --demo --web    # 웹 대시보드 → http://127.0.0.1:8080
+python3 exitguard/dash.py --demo          # 텍스트 모드 (q 종료)
+python3 exitguard/dash.py --demo --web    # 비주얼 모드 → http://127.0.0.1:8080
 ```
 
 <img src="docs/web-demo-phone.png" alt="폰 폭에서 본 웹 대시보드 데모 화면" width="280">
+
+<sub>비주얼 모드는 [Replit Nexus Build Day Seoul](https://luma.com/7qdoj61s) (2026-11-03) 에서 Replit 으로 만들고, 보안·운영 쪽은 Claude Code 로 다듬었다.</sub>
 
 ## 구성
 
