@@ -114,20 +114,56 @@
 
   // ---------------------------------------------------------------- 알림 묶음 목록
   // groups = [{level, kind, title, count, last, clients: [이름..], action}]
+  // 펼친 묶음은 (등급, 제목) 으로 기억해 몇 초마다 다시 그려도 열린 채로 둔다.
+  const openGroups = new Set();
+  const DETAIL_LABEL = { category: "분류", severity: "심각도(1=높음)", sid: "규칙 번호(SID)", proto: "프로토콜", port: "포트",
+    sni: "접속 이름(SNI)", http: "HTTP 요청", dns: "DNS 조회", domain: "도메인", matched: "일치 항목", zone: "도메인 영역",
+    sample: "예시", hour: "시간대", threshold_gb: "기준(GB/시간)", distinct_ports: "서로 다른 포트 수", distinct_hosts: "서로 다른 주소 수" };
   function alertGroups(box, groups) {
     box.replaceChildren();
-    const div = (cls, text) => { const e = document.createElement("div"); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
+    const div = (cls, text, tag) => { const e = document.createElement(tag || "div"); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
     if (!groups || !groups.length) { box.append(div("empty", "알림 없음")); return; }
+    const hms = t => String(t || "").slice(11, 19);
+    const place = (ip, country, host) => [ip, host, country].filter(Boolean).join(" · ") || "-";
     for (const g of groups) {
-      const row = div("eg-alert");
+      const key = g.level + "|" + g.title;
+      const item = div("eg-group", null, "details");
+      item.open = openGroups.has(key);
+      item.addEventListener("toggle", () => { item.open ? openGroups.add(key) : openGroups.delete(key); });
+      const row = div("eg-alert", null, "summary");
       const lv = div("eg-lv", g.level); lv.style.background = LEVEL_COLOR[g.level] || LEVEL_COLOR.INFO;
       lv.style.color = g.level === "CRITICAL" ? "#fff" : "#0b1526";
       const body = div("eg-body");
       body.append(div("eg-title", g.title || ""));
-      body.append(div("eg-meta", `${String(g.last || "").slice(11, 19)} · ${(g.clients || []).join(", ")}` + (g.action ? ` · ${g.action}` : "")));
+      body.append(div("eg-meta", `${hms(g.last)} · ${(g.clients || []).join(", ")}` + (g.action ? ` · ${g.action}` : "")));
       const cnt = div("eg-count", "×" + g.count);
       row.append(lv, body, cnt);
-      box.append(row);
+      item.append(row);
+
+      const det = div("eg-detail");
+      if (g.explain) det.append(div("eg-explain", g.explain));
+      det.append(div("eg-k", `처음 ${String(g.first || "").slice(5, 19).replace("T", " ")} · 마지막 ${String(g.last || "").slice(5, 19).replace("T", " ")} · 24시간 ${g.count}건`));
+      if (g.dests && g.dests.length) {
+        det.append(div("eg-h", "목적지"));
+        for (const d of g.dests) det.append(div("eg-line mono", `${place(d.ip, d.country, d.host)}  ×${d.count}`));
+      }
+      const ev = g.events || [];
+      if (ev.length) {
+        det.append(div("eg-h", `최근 기록 ${ev.length}건` + (g.count > ev.length ? ` (전체 ${g.count}건 중)` : "")));
+        for (const e of ev) {
+          const one = div("eg-event");
+          one.append(div("eg-line", `${hms(e.ts)} · ${e.client_name} → ${place(e.dest, e.country)}` + (e.action ? ` · ${e.action}` : "")));
+          const kv = Object.entries(e.detail || {});
+          if (kv.length) {
+            const dl = div("eg-kv", null, "dl");
+            for (const [k, v] of kv) { dl.append(div(null, DETAIL_LABEL[k] || k, "dt"), div("mono", v, "dd")); }
+            one.append(dl);
+          }
+          det.append(one);
+        }
+      }
+      item.append(det);
+      box.append(item);
     }
   }
 

@@ -13,7 +13,7 @@ header .sub{opacity:.85;font-size:13px}
 main{padding:clamp(10px,1.5vw,28px);display:grid;gap:clamp(12px,1.2vw,24px);grid-template-columns:minmax(0,1fr);grid-template-areas:"summary" "globe" "recent" "alerts" "clients" "dests" "protocols" "status" "slack";max-width:2400px;margin:0 auto}
 .summary{grid-area:summary}.globe-panel{grid-area:globe}.recent-panel{grid-area:recent}.alerts-panel{grid-area:alerts}.clients-panel{grid-area:clients}.dests-panel{grid-area:dests}.protocols-panel{grid-area:protocols}.status-panel{grid-area:status}.slack-panel{grid-area:slack}
 @media(min-width:760px){main{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"summary summary" "globe globe" "recent alerts" "clients clients" "dests protocols" "status status" "slack slack"}}
-@media(min-width:1200px){main{grid-template-columns:minmax(0,1.55fr) minmax(360px,1fr);grid-template-areas:"summary summary" "globe recent" "globe alerts" "clients clients" "dests protocols" "status status" "slack slack"}.globe-panel{display:flex;flex-direction:column;justify-content:center}.globe-panel h2{align-self:stretch}#recent{max-height:220px}#alerts{max-height:260px;overflow:auto}.clients-panel #clients{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.clients-panel #clients .row{border-top:0}.clients-panel #traffic{max-width:1200px;margin:auto}}
+@media(min-width:1200px){main{grid-template-columns:minmax(0,1.55fr) minmax(360px,1fr);grid-template-areas:"summary summary" "globe recent" "globe alerts" "clients clients" "dests protocols" "status status" "slack slack"}.globe-panel{display:flex;flex-direction:column;justify-content:center}.globe-panel h2{align-self:stretch}#recent{max-height:220px}#alerts{max-height:420px;overflow:auto}.clients-panel #clients{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.clients-panel #clients .row{border-top:0}.clients-panel #traffic{max-width:1200px;margin:auto}}
 header>*{min-width:0;overflow-wrap:anywhere}section,p,.metric{overflow-wrap:anywhere}main>*{min-width:0}
 section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
 .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
@@ -43,7 +43,14 @@ h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transfor
 .lv{font-size:11px;font-weight:700;padding:0 5px;border-radius:4px;border:1px solid currentColor}
 .empty{color:var(--mute);padding:6px 0}
 .chart{width:100%;height:auto;display:block}
-.eg-alert{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:10px 0}
+.eg-alert{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:10px 0;cursor:pointer;list-style:none}
+.eg-alert::-webkit-details-marker{display:none}.eg-alert::after{content:"▸";color:var(--mute);font-size:12px}.eg-group[open]>.eg-alert::after{content:"▾"}
+.eg-alert:hover .eg-title{text-decoration:underline}.eg-alert:focus-visible{outline:2px solid var(--accent,#58a6ff);outline-offset:2px}
+.eg-detail{padding:2px 0 12px 66px;font-size:13px}.eg-explain{margin:2px 0 6px;line-height:1.5}
+.eg-k,.eg-h{font-size:12px;color:var(--mute)}.eg-h{margin-top:8px;font-weight:600}.eg-line{overflow-wrap:anywhere;padding:2px 0}
+.eg-event{border-left:2px solid var(--line);padding-left:8px;margin:6px 0}
+.eg-kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:1px 10px;margin:2px 0 0;font-size:12px}.eg-kv dt{color:var(--mute)}.eg-kv dd{margin:0;overflow-wrap:anywhere}
+@media(max-width:520px){.eg-detail{padding-left:0}}
 .eg-lv{font-size:10px;font-weight:700;color:#fff;border-radius:4px;padding:2px 5px;min-width:58px;text-align:center}
 .eg-body{flex:1;min-width:0}.eg-title{font-weight:600;overflow-wrap:anywhere}
 .eg-meta{font-size:12px;color:var(--mute);overflow-wrap:anywhere}.eg-count{font-weight:700}
@@ -84,7 +91,7 @@ main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" 
 <p>이 화면은 설정을 저장하거나 메시지를 보내지 않습니다. 알림은 감시 서비스가 전송하므로 브라우저를 닫아도 동작합니다. 실제 수신 여부는 Slack 채널에서 확인하세요.</p>
 </details></section>
 <section class="clients-panel"><h2>클라이언트 (최근 5분)</h2><div id="clients"></div><h2>기기별 트래픽 · 최근 10분</h2><svg id="traffic" class="chart" aria-label="기기별 트래픽 추이"></svg></section>
-<section class="alerts-panel"><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>주의 목적지 · 차단 및 최근 24h 알림</h2><div id="attention" tabindex="0" role="region" aria-label="주의 목적지 목록"></div><h2>알림 묶음 (최신순)</h2><div id="alerts" tabindex="0" role="region" aria-label="알림 묶음 목록"></div></section>
+<section class="alerts-panel"><h2>24시간 등급별 알림</h2><svg id="bars" class="chart" aria-label="등급별 알림 수"></svg><h2>주의 목적지 · 차단 및 최근 24h 알림</h2><div id="attention" tabindex="0" role="region" aria-label="주의 목적지 목록"></div><h2>알림 묶음 (최신순 · 눌러서 자세히)</h2><div id="alerts" tabindex="0" role="region" aria-label="알림 묶음 목록"></div></section>
 <section class="dests-panel"><h2>상위 목적지 (최근 2분, 바이트)</h2><div id="dests"></div></section>
 <section class="protocols-panel"><h2>프로토콜 비율 · 최근 5분</h2><svg id="donut" class="chart" aria-label="프로토콜별 트래픽 비율"></svg></section>
 </main>

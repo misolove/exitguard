@@ -331,6 +331,19 @@ class Model:
                         "level": "HIGH" if ip in self.nft["blocked"] else None})
         return {"home": self._geo["home"], "points": pts, "source": geoip.ATTRIBUTION}
 
+    def country_of(self, ip):
+        """목적지 IP → 나라 이름 (오프라인 GeoIP). 모르면 None. 지금 흐름이 없는 과거 알림 목적지에도 쓴다."""
+        db = self._geodb()
+        if db is None or not ip:
+            return None
+        cache = self._geo["cache"]
+        if ip not in cache:
+            try:
+                cache[ip] = db.country(ip)
+            except (ValueError, TypeError):
+                cache[ip] = None
+        return (geoip.COUNTRY.get(cache[ip]) or (None, None, None))[2]
+
     def series(self, step=10, n=60):
         """기기별 바이트를 step 초 칸 n 개로 묶는다 (가장 오래된 칸이 앞). 웹 선 그래프용."""
         end = int(time.time() // step * step) + step
@@ -383,6 +396,12 @@ class DemoModel(Model):
                      ("MEDIUM", "ids-alert", "EXITGUARD 평문 HTTP Basic Auth 전송"),
                      ("HIGH", "ids-alert", "ET MALWARE 알려진 C2 비컨 패턴 (데모)")]
     ALERT_DESTS = ("198.51.100.10", "192.0.2.53", "203.0.113.40", "203.0.113.66")
+    ALERT_DETAILS = ({"category": "Misc activity", "severity": 3, "proto": "TCP", "port": 443, "sni": "demo.example.zip"},
+                     {"zone": "example.net", "queries_5min": 72},
+                     {"category": "Potential Corporate Privacy Violation", "severity": 2, "proto": "TCP", "port": 80,
+                      "http": "GET update.example.com/admin"},
+                     {"category": "A Network Trojan was detected", "severity": 1, "proto": "TCP", "port": 443,
+                      "sni": "c2.example.org"})
 
     def __init__(self):
         super().__init__()
@@ -402,7 +421,7 @@ class DemoModel(Model):
         for i, (lv, kind, title) in enumerate(self.ALERT_SAMPLES):
             ts = datetime.fromtimestamp(now - (len(self.ALERT_SAMPLES) - i) * 900).isoformat(timespec="seconds")
             self.alerts.append({"ts": ts, "level": lv, "kind": kind, "title": title, "client": list(self.CLIENTS)[i % 3],
-                                "dest": self.ALERT_DESTS[i],
+                                "dest": self.ALERT_DESTS[i], "details": self.ALERT_DETAILS[i],
                                 "action": "목적지 24h 차단" if lv == "HIGH" else None})
         self.nft["blocked"] = {"203.0.113.66": {}}
 
@@ -422,11 +441,14 @@ class DemoModel(Model):
         lat, lon, city = self.HOME_GEO
         return {"home": {"city": city, "lat": lat, "lon": lon}, "points": pts}
 
+    def country_of(self, ip):
+        return (self.GEO.get(ip) or (None, None, None))[2]
+
     def read_alerts(self):
         if self.rnd.random() < 0.03:
-            lv, kind, title = self.rnd.choice(self.ALERT_SAMPLES[:3])
+            i = self.rnd.randrange(3); lv, kind, title = self.ALERT_SAMPLES[i]
             self.alerts.append({"ts": datetime.now().isoformat(timespec="seconds"), "level": lv, "kind": kind,
-                                "dest": self.ALERT_DESTS[self.ALERT_SAMPLES.index((lv, kind, title))],
+                                "dest": self.ALERT_DESTS[i], "details": self.ALERT_DETAILS[i],
                                 "title": title, "client": self.rnd.choice(list(self.CLIENTS)), "action": None})
             self.alerts = self.alerts[-500:]
 
@@ -455,8 +477,60 @@ class DemoModel(Model):
 LEVEL_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
 
-def alert_groups(m, since, n=20):
-    """같은 (등급, 제목) 알림을 한 줄로 접는다: 횟수·최근 시각·관련 기기. 등급 높은 것, 최근 것 순."""
+# 시그니처 이름 앞부분 → 쉬운 설명 (ET Open 규칙 분류). 위에서부터 처음 맞는 것.
+EXPLAIN = [
+    ("EXITGUARD HTTP Basic Auth", "암호화되지 않은 HTTP 로 아이디·비밀번호를 보냈습니다. 같은 경로의 누구나 볼 수 있으니 HTTPS 로 바꾸거나 비밀번호를 바꾸세요."),
+    ("EXITGUARD", "ExitGuard 가 직접 넣은 규칙(local.rules)에 걸렸습니다."),
+    ("ET MALWARE", "알려진 악성코드 통신 패턴입니다. 해당 기기를 점검하세요."),
+    ("ET TROJAN", "알려진 악성코드 통신 패턴입니다. 해당 기기를 점검하세요."),
+    ("ET CNC", "악성코드 지휘 서버로 알려진 곳과의 통신입니다. 해당 기기를 점검하세요."),
+    ("ET EXPLOIT", "취약점 공격 시도 패턴입니다."),
+    ("ET SCAN", "포트·서비스 스캔 패턴입니다."),
+    ("ET PHISHING", "피싱 사이트로 알려진 곳과의 통신입니다."),
+    ("ET USER_AGENTS", "흔하지 않은 프로그램 이름(User-Agent)으로 접속했습니다. 앱·스크립트가 낸 요청이면 대개 정상입니다."),
+    ("ET POLICY", "회사 보안 정책에서 흔히 막는 종류의 통신입니다. 직접 쓰는 서비스면 대개 정상입니다."),
+    ("ET INFO", "정보성 알림입니다. 어떤 서비스를 썼다는 흔적이며 대개 정상입니다."),
+]
+KIND_EXPLAIN = {"dns-dga": "무작위처럼 보이는 도메인을 연달아 조회했습니다 (악성코드가 쓰는 방식과 비슷).",
+                "bandwidth": "한 시간 사용량이 기준을 넘었습니다.",
+                "port-scan": "짧은 시간에 여러 포트로 접속했습니다.",
+                "host-scan": "짧은 시간에 여러 주소로 접속했습니다.",
+                "dns-blocklist": "차단 목록에 있는 도메인을 조회했습니다."}
+DETAIL_KEYS = ("category", "severity", "sid", "proto", "port", "sni", "http", "dns", "domain", "matched", "zone",
+               "sample", "hour", "threshold_gb", "distinct_ports", "distinct_hosts")
+
+
+def explain(kind, title):
+    t = title or ""
+    for prefix, text in EXPLAIN:
+        if t.startswith(prefix):
+            return text
+    return KIND_EXPLAIN.get(kind)
+
+
+def alert_detail(a):
+    """details 중 화면에 보일 값만, 문자열은 제어문자 제거·길이 제한."""
+    d = a.get("details")
+    if not isinstance(d, dict):
+        return {}
+    out = {}
+    for k in DETAIL_KEYS:
+        v = d.get(k)
+        if v in (None, "", [], {}):
+            continue
+        out[k] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else printable(v)[:160]
+    return out
+
+
+def clean_action(a):
+    """watch.py 가 조치 없음을 문자열 "None" 으로 적은 기록도 있다 → None."""
+    v = a.get("action")
+    return None if v in (None, "", "None") else printable(v)[:160]
+
+
+def alert_groups(m, since, n=20, per=8):
+    """같은 (등급, 제목) 알림을 한 줄로 접는다: 횟수·최근 시각·관련 기기. 등급 높은 것, 최근 것 순.
+    클릭해서 펼칠 때 쓰는 값: 쉬운 설명, 목적지별 횟수, 최근 per 건의 기록."""
     groups = {}
     for a in m.alerts:
         lv = a.get("level")
@@ -468,16 +542,31 @@ def alert_groups(m, since, n=20):
         except Exception:
             continue
         g = groups.setdefault((lv, a.get("title")), {"level": lv, "kind": a.get("kind"), "title": a.get("title"),
-                                                    "count": 0, "last": "", "clients": [], "action": None})
+                                                    "count": 0, "first": a["ts"], "last": "", "clients": [],
+                                                    "action": None, "_dests": collections.Counter(), "_events": []})
         g["count"] += 1
+        g["first"] = min(g["first"], a["ts"])
         if a["ts"] >= g["last"]:
-            g["last"] = a["ts"]; g["action"] = a.get("action") or g["action"]
+            g["last"] = a["ts"]; g["action"] = clean_action(a) or g["action"]
         name = m.name(a.get("client") or "-")
         if name not in g["clients"]:
             g["clients"].append(name)
+        if a.get("dest"):
+            g["_dests"][a["dest"]] += 1
+        g["_events"].append(a)
     out = sorted(groups.values(), key=lambda g: g["last"], reverse=True)
     out.sort(key=lambda g: LEVEL_RANK.get(g["level"], 9))
-    return out[:n]
+    out = out[:n]
+    for g in out:
+        g["explain"] = explain(g["kind"], g["title"])
+        g["dests"] = [{"ip": ip, "count": c, "country": m.country_of(ip), "host": m.hosts.get(ip) or None}
+                      for ip, c in g.pop("_dests").most_common(5)]
+        ev = sorted(g.pop("_events"), key=lambda a: a["ts"], reverse=True)[:per]
+        g["events"] = [{"ts": a["ts"], "client_name": m.name(a.get("client") or "-"), "dest": a.get("dest"),
+                        "country": m.country_of(a.get("dest")),
+                        "action": clean_action(a),
+                        "detail": alert_detail(a)} for a in ev]
+    return out
 
 
 def slack_status():
@@ -566,7 +655,7 @@ def snapshot(m):
         "destination_count": len({ext for ts, c, ext, port, proto, b, app in m.flows if now - ts <= 120}),
         "attention_dests": [
             {"ip": ip, "blocked": ip in m.nft["blocked"],
-             "city": next((p.get("city") for p in geo["points"] if p["ip"] == ip), None),
+             "city": next((p.get("city") for p in geo["points"] if p["ip"] == ip), None) or m.country_of(ip),
              "host": next((p.get("host") for p in geo["points"] if p["ip"] == ip), None),
              "last_alert": ({k: latest[ip][1].get(k) for k in ("ts", "level", "title")} if ip in latest else None)}
             for ip in sorted(set(m.nft["blocked"]) | {ip for ip, (ts, a) in latest.items() if ts > day},
