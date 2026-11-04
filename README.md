@@ -131,6 +131,14 @@ sudo ./install.sh
 - `never_block`: 사설망·tailnet·주요 DNS 는 절대 차단하지 않음.
 - `notify.min_level`: 이 등급 이상만 데스크톱/webhook/Telegram 으로 발송(기본 MEDIUM). 모든 등급은 `alerts.log` 에 기록.
 - 외부 알림: `notify.webhook_url`(Discord/Slack 호환 JSON) 또는 `notify.telegram.{bot_token,chat_id}` 입력 후 `sudo systemctl restart exitguard-watch`.
+- **Slack 버튼 연결** ("Add to Slack"): webhook 주소를 손으로 옮기지 않고 Slack 로그인·채널 선택으로 연결한다.
+  ```bash
+  sudo exitguardctl slack-connect --setup   # 처음 한 번: 출력된 링크로 Slack 앱 생성(설정 채워짐) → Client ID·Secret 입력 (/etc/exitguard/slack-app.json, 0600)
+  sudo exitguardctl slack-connect           # 5분 대기: 웹 대시보드의 "Slack에 연결" 버튼 → 로그인·채널 선택 → 터미널에서 확인
+  ```
+  - 콜백은 `tailscale serve` 로 연 tailnet 전용 HTTPS(`https://<머신>.<tailnet>.ts.net:8443/slack/callback`)로 5분 동안만 받고 닫는다 (funnel 아님). `state` 값이 다르면 거부
+  - 저장 전 터미널에서 워크스페이스·채널을 확인하고, 저장 뒤 테스트 메시지 전송·`exitguard-watch` 재시작
+  - 상시 웹 대시보드는 그대로 읽기 전용이다. 버튼은 대기 중일 때만 나타나는 slack.com 승인 링크일 뿐이고, 설정은 root 로 도는 일회용 명령만 쓴다
 
 ## 데모 모드 (설치 없이 화면만 보기)
 

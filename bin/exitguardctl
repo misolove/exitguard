@@ -27,6 +27,7 @@ exitguardctl <command>
   capture <client-ip> [sec]  해당 클라이언트 트래픽 pcap 캡처 (기본 60초)
   top [sec]                  최근 N초 eve.json 기준 목적지 TOP (기본 60)
   rules-update               Suricata 룰 갱신 + 리로드
+  slack-connect [--setup]    Slack 연결 (--setup: 앱 정보 저장, 이후 버튼으로 로그인·채널 선택)
   logs                       watcher 서비스 로그
 USAGE
 }
@@ -72,6 +73,7 @@ case "$cmd" in
     jq -r --arg s "$since" 'select(.event_type=="flow" and .timestamp>=$s) | select(.flow.reason!="shutdown") | "\(.src_ip)\t\(.dest_ip):\(.dest_port)/\(.proto)\t\((.flow.bytes_toserver+.flow.bytes_toclient))"' /var/log/suricata/eve.json 2>/dev/null \
       | awk -F'\t' '{b[$1"\t"$2]+=$3} END{for(k in b) print b[k]"\t"k}' | sort -rn | head -30 | column -t ;;
   rules-update) need_root "$cmd" "$@"; /usr/local/lib/exitguard/rules-update.sh ;;
+  slack-connect) need_root "$cmd" "$@"; python3 $LIB/slack_connect.py "$@" ;;
   logs) journalctl -u exitguard-watch -n "${1:-50}" --no-pager ;;
   *) usage ;;
 esac
