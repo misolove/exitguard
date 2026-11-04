@@ -51,7 +51,8 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:4px 16px 20px}
 .health{flex-basis:100%;font-weight:600}.metric strong.unknown{color:var(--mute);font-size:22px}
 .detection{font-size:13px;font-weight:600}.detection.ok{color:var(--ok)}.detection.warn,#risk-note{color:var(--warn)}.detection.bad{color:var(--bad)}#risk-note{font-style:normal}.stale .summary,.stale #status{opacity:.6}
 .stale #globe{opacity:.55}.stale #freshness{color:var(--warn)}#err{color:var(--bad)}
-#traffic{max-height:260px}#attention{max-height:220px;overflow:auto}
+#traffic{max-height:260px}#attention{max-height:240px;overflow:auto;overscroll-behavior:contain;border-bottom:1px solid var(--line);padding-bottom:24px;-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 28px),transparent)}
+.alerts-panel h2{margin-top:16px}.alerts-panel h2:first-child{margin-top:0}
 main{grid-template-areas:"summary" "status" "alerts" "globe" "recent" "clients" "dests" "protocols" "slack"}
 @media(min-width:760px){main{grid-template-areas:"summary summary" "status status" "alerts alerts" "globe recent" "clients clients" "dests protocols" "slack slack"}}
 @media(min-width:1200px){main{grid-template-areas:"summary summary" "status status" "globe alerts" "globe recent" "clients clients" "dests protocols" "slack slack"}}

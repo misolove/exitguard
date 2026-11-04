@@ -229,20 +229,69 @@
       const y = -R * (Math.cos(p0) * Math.sin(p) - Math.sin(p0) * Math.cos(p) * Math.cos(l));
       return [W / 2 + x, H / 2 + y, cosc > 0 || (lift > 1 && Math.hypot(x, y) > base * state.zoom)];
     }
-    // 뒷면 점은 지평선 원 위로 붙여 채운 다각형이 앞면에서 깨지지 않게 한다
-    function ringPath(ring) {
-      const R = base * state.zoom;
-      let d = "", any = false;
-      for (let i = 0; i < ring.length; i++) {
-        let [x, y, vis] = project(ring[i][0], ring[i][1]);
-        if (vis) any = true;
-        else {
-          const dx = x - W / 2, dy = y - H / 2, r = Math.hypot(dx, dy) || 1;
-          x = W / 2 + dx / r * R; y = H / 2 + dy / r * R;
+    // 지평선(cos c = 0)으로 잘라 보이는 부분만 칠한다 (d3 clipCircle 과 같은 방식).
+    // 1) 링마다 보이는 구간(들어오는 점 → … → 나가는 점)을 모은다
+    // 2) 나가는 점에서 지평선 원을 시계 방향으로 따라가 처음 만나는 들어오는 점에 다음 구간을 잇는다
+    // world-atlas 의 바깥 테두리는 시계 방향(구멍은 반대)이라 시계 방향으로 이으면 땅 쪽이 채워진다.
+    // (예전에는 뒷면 점을 원 위로 끌어 직선으로 이어서 가장자리가 각지게 잘렸다)
+    function cosC(lon, lat) {
+      const l = (lon - state.lon) * RAD, p = lat * RAD, p0 = state.lat * RAD;
+      return Math.sin(p0) * Math.sin(p) + Math.cos(p0) * Math.cos(p) * Math.cos(l);
+    }
+    function polyPath(poly) {
+      const R = base * state.zoom, cx = W / 2, cy = H / 2, TAU = 2 * Math.PI;
+      const pt = ([x, y]) => x.toFixed(1) + " " + y.toFixed(1);
+      const ang = ([x, y]) => Math.atan2(y - cy, x - cx);
+      let d = "";
+      const segs = [];
+      for (const ring of poly) {
+        const closed = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+        const n = closed ? ring.length - 1 : ring.length;
+        const c = ring.slice(0, n).map(p => cosC(p[0], p[1]));
+        const P = i => project(ring[i][0], ring[i][1]);
+        const hidden = c.findIndex(v => v <= 0);
+        if (hidden < 0) {   // 전부 보임
+          for (let i = 0; i < n; i++) d += (i ? "L" : "M") + pt(P(i));
+          d += "Z"; continue;
         }
-        d += (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+        if (!c.some(v => v > 0)) continue;   // 전부 뒷면
+        const edge = (i, j) => {   // i→j 사이 지평선 통과점 (원 위로 정규화)
+          const t = c[i] / (c[i] - c[j]);
+          let dl = ring[j][0] - ring[i][0]; if (dl > 180) dl -= 360; else if (dl < -180) dl += 360;
+          const [x, y] = project(ring[i][0] + dl * t, ring[i][1] + (ring[j][1] - ring[i][1]) * t);
+          const r = Math.hypot(x - cx, y - cy) || 1;
+          return [cx + (x - cx) / r * R, cy + (y - cy) / r * R];
+        };
+        let cur = null;
+        for (let k = 1; k <= n; k++) {
+          const j = (hidden + k) % n, i = (j - 1 + n) % n;
+          if (c[i] <= 0 && c[j] > 0) { const e = edge(i, j); cur = { pts: [e, P(j)], a0: ang(e) }; }
+          else if (c[i] > 0 && c[j] > 0) cur.pts.push(P(j));
+          else if (c[i] > 0) { const e = edge(i, j); cur.pts.push(e); cur.a1 = ang(e); segs.push(cur); cur = null; }
+        }
       }
-      return any ? d + "Z" : "";
+      const used = new Set();
+      for (let s0 = 0; s0 < segs.length; s0++) {
+        if (used.has(s0)) continue;
+        let k = s0;
+        d += "M" + pt(segs[k].pts[0]);
+        for (let guard = 0; guard <= segs.length; guard++) {
+          used.add(k);
+          for (let m = 1; m < segs[k].pts.length; m++) d += "L" + pt(segs[k].pts[m]);
+          let best = s0, bd = Infinity;
+          segs.forEach((t, ti) => {
+            if (used.has(ti) && ti !== s0) return;
+            const dd = ((t.a0 - segs[k].a1) % TAU + TAU) % TAU;
+            if (dd < bd) { bd = dd; best = ti; }
+          });
+          const to = segs[best].pts[0];
+          d += bd < 1e-3 ? "L" + pt(to) : `A${R.toFixed(1)} ${R.toFixed(1)} 0 ${bd > Math.PI ? 1 : 0} 1 ` + pt(to);
+          if (best === s0) break;
+          k = best;
+        }
+        d += "Z";
+      }
+      return d;
     }
     // 보이는 구간만 이은 선 (경위선, 호)
     function runs(pts, lift) {
@@ -281,7 +330,7 @@
       root.append(s("path", { d: grat, fill: "none", stroke: "#58a6ff", "stroke-opacity": 0.12, "stroke-width": 0.6 }));
 
       let d = "";
-      for (const poly of land) for (const ring of poly) d += ringPath(ring);
+      for (const poly of land) d += polyPath(poly);
       root.append(s("path", { d, fill: "#2b4a6f", stroke: "#4f78a8", "stroke-width": 0.5, "fill-rule": "evenodd" }));
       root.append(s("circle", { cx: W / 2, cy: H / 2, r: R, fill: "none", stroke: "#58a6ff", "stroke-opacity": 0.35 }));
 
