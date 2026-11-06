@@ -2,6 +2,7 @@
 
 규칙: 호스트가 표의 이름과 같거나 그 하위 도메인이면 맞음. 여러 개가 맞으면 가장 긴(구체적인) 것.
 표에 없으면 None (화면은 용도를 생략). 새 서비스는 아래 표에 한 줄 추가.
+확인되지 않고 기록으로 짐작만 한 것은 설명을 "추정: " 으로 시작한다 (확인된 설명과 섞이지 않게).
 """
 
 PURPOSE = {
@@ -101,6 +102,10 @@ PURPOSE = {
     "abr.ge": "앱 링크 (Airbridge)", "adison.co": "리워드 광고 (애디슨)", "admixer.co.kr": "앱 광고 (애드믹서)",
     "ketchcdn.com": "쿠키 동의 창", "ketchjs.com": "쿠키 동의 창", "antigravity-unleash.goog": "Google Antigravity 기능 설정",
     "ts.net": "Tailscale 내부 기기",
+    # 추정: 정체가 확인되지 않아 기록(기기·주기·함께 나온 도메인)으로만 짐작한 것. 확인되면 "추정:" 을 떼거나 고친다.
+    "firwinds.site": "추정: 광고 많은 앱의 서버 확인",       # S24, 15분마다, TeraBox·광고 SDK 와 함께 (11-06)
+    "cr-relay.com": "추정: 웹페이지 광고·추적 스크립트",     # Mac Safari 웹페이지 보던 중 한 번 (11-06)
+    "mczbf.com": "추정: 웹페이지 광고·추적 스크립트",        # 위와 같은 시각, CloudFront (11-06)
 }
 
 

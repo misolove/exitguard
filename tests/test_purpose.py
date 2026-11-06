@@ -28,6 +28,10 @@ class PurposeTest(unittest.TestCase):
             self.assertEqual(k, k.lower().strip("."), k)
             self.assertTrue(0 < len(v) <= 30, v)
 
+    def test_guesses_are_marked(self):
+        self.assertTrue(p.purpose("api.firwinds.site").startswith("추정: "))
+        self.assertTrue(p.purpose("cdn.cr-relay.com").startswith("추정: "))
+
     def test_local_names(self):
         self.assertEqual(p.purpose("godam"), "내부 기기 이름 조회")
         self.assertEqual(p.purpose("godam.example-tailnet.ts.net"), "Tailscale 내부 기기")
