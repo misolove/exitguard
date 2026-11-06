@@ -28,6 +28,7 @@ exitguardctl <command>
   top [sec]                  최근 N초 eve.json 기준 목적지 TOP (기본 60)
   rules-update               Suricata 룰 갱신 + 리로드
   slack-connect [--setup]    Slack 연결 (--setup: 앱 정보 저장, 이후 버튼으로 로그인·채널 선택)
+  purpose-unknown [줄수]     용도 설명이 없는 도메인 상위 50 (purpose.py 표에 추가할 후보)
   logs                       watcher 서비스 로그
 USAGE
 }
@@ -74,6 +75,7 @@ case "$cmd" in
       | awk -F'\t' '{b[$1"\t"$2]+=$3} END{for(k in b) print b[k]"\t"k}' | sort -rn | head -30 | column -t ;;
   rules-update) need_root "$cmd" "$@"; /usr/local/lib/exitguard/rules-update.sh ;;
   slack-connect) need_root "$cmd" "$@"; python3 $LIB/slack_connect.py "$@" ;;
+  purpose-unknown) python3 -I $LIB/purpose.py "$@" ;;
   logs) journalctl -u exitguard-watch -n "${1:-50}" --no-pager ;;
   *) usage ;;
 esac

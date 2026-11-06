@@ -28,6 +28,18 @@ class PurposeTest(unittest.TestCase):
             self.assertEqual(k, k.lower().strip("."), k)
             self.assertTrue(0 < len(v) <= 30, v)
 
+    def test_local_names(self):
+        self.assertEqual(p.purpose("godam"), "내부 기기 이름 조회")
+        self.assertEqual(p.purpose("godam.example-tailnet.ts.net"), "Tailscale 내부 기기")
+
+    def test_unknown_lister(self):
+        lines = ['{"event_type":"tls","tls":{"sni":"a.mystery.example"}}',
+                 '{"event_type":"dns","dns":{"rrname":"b.mystery.example."}}',
+                 '{"event_type":"tls","tls":{"sni":"api.anthropic.com"}}',
+                 '{"event_type":"http","http":{"hostname":"203.0.113.9"}}',
+                 '{"event_type":"tls","tls":{"sni":"x.shop.co.kr"}}', 'not json "sni"']
+        self.assertEqual(dict(p.unknown(lines)), {"mystery.example": 2, "shop.co.kr": 1})
+
 
 if __name__ == "__main__":
     unittest.main()
