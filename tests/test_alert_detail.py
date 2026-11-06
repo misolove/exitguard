@@ -43,6 +43,7 @@ class AlertDetailTest(unittest.TestCase):
         self.assertIn("HTTPS", ex("ids-alert", "EXITGUARD HTTP Basic Auth over plaintext"))
         self.assertIn("악성코드", ex("ids-alert", "ET MALWARE Something"))
         self.assertIn("User-Agent", ex("ids-alert", "ET USER_AGENTS Go HTTP Client User-Agent"))
+        self.assertIn("오탐", ex("ids-alert", "ET WEB_CLIENT eval String.fromCharCode String Which May Be Malicious"))
         self.assertIn("무작위", ex("dns-dga", "NXDOMAIN 급증"))
         self.assertIsNone(ex("ids-alert", "GPL something new"))
 
