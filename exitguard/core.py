@@ -5,7 +5,7 @@ import collections, ipaddress, json, os, subprocess, sys, time, unicodedata
 from datetime import datetime
 from urllib.parse import urlsplit
 
-import geoip, ids_health, slack_connect
+import geoip, ids_health, purpose, slack_connect
 
 CFG_PATH = os.environ.get("EXITGUARD_CONFIG", "/etc/exitguard/config.json")
 EVE = os.environ.get("EXITGUARD_EVE", "/var/log/suricata/eve.json")
@@ -559,7 +559,8 @@ def alert_groups(m, since, n=20, per=8):
     out = out[:n]
     for g in out:
         g["explain"] = explain(g["kind"], g["title"])
-        g["dests"] = [{"ip": ip, "count": c, "country": m.country_of(ip), "host": m.hosts.get(ip) or None}
+        g["dests"] = [{"ip": ip, "count": c, "country": m.country_of(ip), "host": m.hosts.get(ip) or None,
+                       "purpose": purpose.purpose(m.hosts.get(ip))}
                       for ip, c in g.pop("_dests").most_common(5)]
         ev = sorted(g.pop("_events"), key=lambda a: a["ts"], reverse=True)[:per]
         g["events"] = [{"ts": a["ts"], "client_name": m.name(a.get("client") or "-"), "dest": a.get("dest"),
@@ -644,6 +645,7 @@ def snapshot(m):
         ts, c = seen.get(p["ip"], (None, None))
         if c is None and alert and alert.get("client"):       # 흐름 기록이 없으면(차단된 곳 등) 마지막 알림의 기기
             ts, c = latest[p["ip"]][0], alert["client"]
+        p["purpose"] = purpose.purpose(p.get("host"))
         p["last_client"] = ({"name": m.name(c), "ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"),
                              "ago": ago(ts)} if c else None)
     return {
@@ -687,6 +689,6 @@ def snapshot(m):
         "protos": m.protos(),
         "geo": geo,
         "recent": [{"ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"), "client": c,
-                    "client_name": m.name(c), "label": label}
+                    "client_name": m.name(c), "label": label, "purpose": purpose.purpose(label)}
                    for ts, c, label in m.recent_dests(30)],
     }

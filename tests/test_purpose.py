@@ -1,0 +1,33 @@
+"""purpose.py: 목적지 이름 → 짧은 용도 설명 (고정 표, 가장 구체적인 것 우선)."""
+import importlib.util, os, unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+spec = importlib.util.spec_from_file_location("purpose", os.path.join(ROOT, "exitguard", "purpose.py"))
+p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
+
+
+class PurposeTest(unittest.TestCase):
+    def test_most_specific_wins(self):
+        self.assertEqual(p.purpose("speeddials.opera.com"), "Opera 새 탭 바로가기 타일")
+        self.assertEqual(p.purpose("www.opera.com"), "Opera 브라우저")
+        self.assertEqual(p.purpose("ecs.office.com"), "Office 앱 설정·기능 업데이트")
+
+    def test_labels_and_case(self):
+        self.assertEqual(p.purpose("openapi.tossinvest.com [tls]"), "토스증권 시세·주문")
+        self.assertEqual(p.purpose("API.Anthropic.COM."), "Claude (Anthropic)")
+
+    def test_unknown_and_lookalikes(self):
+        self.assertIsNone(p.purpose("example.org"))
+        self.assertIsNone(p.purpose("evilopera.com"))           # 'opera.com' 으로 끝나도 다른 도메인
+        self.assertIsNone(p.purpose("opera.com.evil.example"))
+        self.assertIsNone(p.purpose("102.67.165.90"))
+        self.assertIsNone(p.purpose(None))
+
+    def test_table_is_clean(self):
+        for k, v in p.PURPOSE.items():
+            self.assertEqual(k, k.lower().strip("."), k)
+            self.assertTrue(0 < len(v) <= 30, v)
+
+
+if __name__ == "__main__":
+    unittest.main()
