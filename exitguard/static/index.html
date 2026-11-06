@@ -219,7 +219,7 @@ function render(s){
   const key = x => JSON.stringify([x.ts, x.client, x.label]);
   fill($("recent"), ordered, x => {
     const d = el("div","row" + (recentKeys && !recentKeys.has(key(x)) ? " fresh" : ""));
-    d.append(el("span","k", hms(x.ts) + " · " + x.client_name));
+    d.append(el("span","k", hms(x.ts) + " · " + x.client_name + (x.purpose ? " · " + x.purpose : "")));
     d.append(el("div","main mono", x.label));
     return d;
   }, "아직 없음");
