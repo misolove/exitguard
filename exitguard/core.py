@@ -634,9 +634,18 @@ def snapshot(m):
             pass
     geo = m.geo()
     geo = {"home": geo.get("home"), "points": [dict(p) for p in geo.get("points", [])], "source": geo.get("source")}
+    seen = {}                                   # 목적지 → (마지막 흐름 시각, 기기). 지구본 툴팁의 "최근 접속 기기"
+    for ts, c, ext, port, proto, b, app in m.flows:
+        if ts >= seen.get(ext, (0, None))[0]:
+            seen[ext] = (ts, c)
     for p in geo["points"]:
         alert = latest.get(p["ip"], (None, None))[1]
         p["last_alert"] = ({k: alert.get(k) for k in ("ts", "level", "title")} if alert else None)
+        ts, c = seen.get(p["ip"], (None, None))
+        if c is None and alert and alert.get("client"):       # 흐름 기록이 없으면(차단된 곳 등) 마지막 알림의 기기
+            ts, c = latest[p["ip"]][0], alert["client"]
+        p["last_client"] = ({"name": m.name(c), "ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"),
+                             "ago": ago(ts)} if c else None)
     return {
         "generated": datetime.fromtimestamp(now).isoformat(timespec="seconds"),
         "demo": DEMO,

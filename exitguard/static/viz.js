@@ -30,6 +30,11 @@
     return (n >= 10 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + u[i];
   }
   function color(i) { return PALETTE[i % PALETTE.length]; }
+  // 서버의 ago() 값("12s"/"3m"/"2h") → "12초 전"
+  function agoKo(a) {
+    const m = /^(\d+)([smh])$/.exec(String(a || ""));
+    return m ? m[1] + { s: "초", m: "분", h: "시간" }[m[2]] + " 전" : "시각 모름";
+  }
 
   // ---------------------------------------------------------------- 시계열
   // series = {step: 10, end: epoch초, clients: [{name, ip, bytes: [..최근 N칸..]}]}
@@ -243,7 +248,7 @@
       }
       tip.hidden = !hit;
       if (!hit) return;
-      const text = `${hit.city || "지역 정보 없음"}\n${hit.host || "호스트 정보 없음"}\nIP: ${hit.ip}\n트래픽: ${human(hit.bytes || 0)} · ${hit.blocked ? "차단됨" : "차단되지 않음"}${hit.last_alert ? "\n최근 알림: " + [hit.last_alert.level, hit.last_alert.ts, hit.last_alert.title].filter(Boolean).join(" · ") : ""}`;
+      const text = `${hit.city || "지역 정보 없음"}\n${hit.host || "호스트 정보 없음"}\nIP: ${hit.ip}\n트래픽: ${human(hit.bytes || 0)} · ${hit.blocked ? "차단됨" : "차단되지 않음"}${hit.last_client ? "\n최근 접속 기기: " + hit.last_client.name + " (" + agoKo(hit.last_client.ago) + ")" : ""}${hit.last_alert ? "\n최근 알림: " + [hit.last_alert.level, hit.last_alert.ts, hit.last_alert.title].filter(Boolean).join(" · ") : ""}`;
       if (tip.textContent !== text) tip.textContent = text;
       tip.style.left = Math.max(8, Math.min(hover.x + 16, window.innerWidth - tip.offsetWidth - 8)) + "px";
       tip.style.top = Math.max(8, Math.min(hover.y + 16, window.innerHeight - tip.offsetHeight - 8)) + "px";

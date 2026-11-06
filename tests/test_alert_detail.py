@@ -53,6 +53,16 @@ class AlertDetailTest(unittest.TestCase):
         self.assertEqual(g["events"][0]["country"], "São Paulo")
         self.assertTrue(all(a["city"] for a in s["attention_dests"]))   # 지금 흐름이 없어도 나라 표시
 
+    def test_globe_point_last_client(self):
+        m = self.d.DemoModel()
+        now = time.time()
+        m.flows.append((now - 30, "100.64.0.12", "198.51.100.10", 443, "tcp", 100, "tls"))
+        m.flows.append((now - 5, "100.64.0.13", "198.51.100.10", 443, "tcp", 100, "tls"))
+        pts = {p["ip"]: p for p in self.d.snapshot(m)["geo"]["points"]}
+        self.assertEqual(pts["198.51.100.10"]["last_client"]["name"], "demo-tablet")   # 가장 최근 흐름의 기기
+        self.assertEqual(pts["198.51.100.10"]["last_client"]["ago"], "5s")
+        self.assertEqual(pts["203.0.113.66"]["last_client"]["name"], "demo-phone")     # 흐름 없는 차단 목적지 → 알림의 기기
+
 
 if __name__ == "__main__":
     unittest.main()
