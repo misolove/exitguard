@@ -38,6 +38,19 @@ class AlertDetailTest(unittest.TestCase):
         self.assertNotIn("unknown_key", det)
         self.assertNotIn("signature", det)                               # 제목과 같으니 생략
 
+    def test_long_host_keeps_domain(self):
+        import collections
+        m = self.core.Model.__new__(self.core.Model)
+        m.hosts = collections.OrderedDict()
+        long = "proj-xtrace-" + "0" * 32 + "-cn-beijing.cn-beijing.log.aliyuncs.com"
+        m._host("198.51.100.7", long)
+        h = m.hosts["198.51.100.7"]
+        self.assertEqual(len(h), 80)
+        self.assertTrue(h.startswith("…") and h.endswith(".log.aliyuncs.com"))
+        self.assertEqual(self.core.purpose.purpose(h), "앱 사용 기록 전송 (알리바바·중국)")
+        m._host("198.51.100.8", "short.example.com")
+        self.assertEqual(m.hosts["198.51.100.8"], "short.example.com")
+
     def test_explain_prefixes(self):
         ex = self.core.explain
         self.assertIn("HTTPS", ex("ids-alert", "EXITGUARD HTTP Basic Auth over plaintext"))

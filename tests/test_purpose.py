@@ -12,6 +12,11 @@ class PurposeTest(unittest.TestCase):
         self.assertEqual(p.purpose("www.opera.com"), "Opera 브라우저")
         self.assertEqual(p.purpose("ecs.office.com"), "Office 앱 설정·기능 업데이트")
 
+    def test_cloud_log_service(self):
+        long = "proj-xtrace-" + "0" * 32 + "-cn-beijing.cn-beijing.log.aliyuncs.com"
+        self.assertEqual(p.purpose(long), "앱 사용 기록 전송 (알리바바·중국)")
+        self.assertEqual(p.purpose("oss-cn-hangzhou.aliyuncs.com"), "알리바바 클라우드 (중국 앱 서버)")
+
     def test_labels_and_case(self):
         self.assertEqual(p.purpose("openapi.tossinvest.com [tls]"), "토스증권 시세·주문")
         self.assertEqual(p.purpose("API.Anthropic.COM."), "Claude (Anthropic)")
