@@ -1,8 +1,30 @@
 #!/usr/bin/env python3
 """ExitGuard watcher: Suricata eve.json 을 실시간으로 읽어
 의심 정황을 탐지·보고하고 nftables 로 차단/격리한다."""
-import collections, json, math, os, signal, sys, time
+import collections, json, math, os, signal, subprocess, sys, time
 from common import (load_config, nets, ip_in, nft_add, Notifier, now_iso)
+
+
+def derp_ips(text):
+    """`tailscale debug derp-map` JSON → Tailscale 중계(DERP) 서버 IP 집합. 못 읽으면 빈 집합."""
+    try:
+        regions = json.loads(text).get("Regions") or {}
+    except (ValueError, AttributeError):
+        return set()
+    out = set()
+    for r in regions.values():
+        for n in (r or {}).get("Nodes") or []:
+            for k in ("IPv4", "IPv6"):
+                if n.get(k):
+                    out.add(n[k])
+    return out
+
+
+def is_derp_check(ev, derp):
+    """Tailscale 앱이 중계 서버에 보내는 인터넷 연결 확인(GET /generate_204) 이면 True — 알려진 정상."""
+    url = ((ev.get("http") or {}).get("url") or "")
+    return bool(derp) and url.split("?")[0] == "/generate_204" and \
+        (ev.get("dest_ip") in derp or ev.get("src_ip") in derp)
 
 
 class Window:
@@ -49,6 +71,7 @@ class Watcher:
         self.block_sev = set(b.get("block_on_severity", [1]))
         self.block_cats = set(b.get("block_categories", []))
         self.ignore_cats = set(b.get("ignore_categories", []))
+        self.derp, self.derp_at = set(), 0.0   # Tailscale 중계 서버 IP (6시간마다 갱신)
         self.block_hours = b.get("dest_block_hours", 24)
         self.cat_levels = b.get("category_levels", {})
         self.sig_levels = sorted(b.get("signature_levels", {}).items(), key=lambda kv: -len(kv[0]))
@@ -129,6 +152,18 @@ class Watcher:
         with open(os.path.join(self.state_dir, name), "a") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+    def derp_set(self):
+        """`tailscale debug derp-map` 으로 중계 서버 목록을 읽는다. 실패하면 이전 목록 유지(없으면 걸러내지 않음)."""
+        if time.time() - self.derp_at > 6 * 3600:
+            self.derp_at = time.time()
+            try:
+                out = subprocess.run(["tailscale", "debug", "derp-map"], capture_output=True,
+                                     text=True, timeout=10).stdout
+                self.derp = derp_ips(out) or self.derp
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return self.derp
+
     def note_high(self, client, title):
         """HIGH 알림 누적 → 임계치 초과 시 격리."""
         if not client:
@@ -151,6 +186,11 @@ class Watcher:
         cat = a.get("category", "")
         sig = a.get("signature", "")
         if cat in self.ignore_cats:
+            return
+        if is_derp_check(ev, self.derp_set()):      # Tailscale 연결 확인: 알림 대신 집계만
+            client, _, _ = self.sides(ev)
+            if client:
+                self.agg[client]["alerts"]["[known] tailscale derp generate_204"] += 1
             return
         client, ext, port = self.sides(ev)
         if client:
