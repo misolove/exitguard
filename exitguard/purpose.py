@@ -54,6 +54,7 @@ PURPOSE = {
     # 인프라·CDN (어느 앱이든 쓰는 공용 서버)
     "cloudflare.com": "Cloudflare (여러 사이트 공용)", "cloudflare-dns.com": "Cloudflare DNS (암호화 DNS)",
     "fastly-edge.com": "Fastly CDN (여러 사이트 공용)", "aliyuncs.com": "알리바바 클라우드 (중국 앱 서버)",
+    "log.aliyuncs.com": "앱 사용 기록 전송 (알리바바·중국)",
     "bcebos.com": "바이두 클라우드 저장소", "volces.com": "바이트댄스 클라우드", "amazonaws.com": "AWS (여러 앱 공용)",
     "akamaized.net": "Akamai CDN (여러 사이트 공용)", "tailscale.com": "Tailscale (이 VPN)",
     "in-addr.arpa": "IP → 이름 역조회", "ip6.arpa": "IP → 이름 역조회",

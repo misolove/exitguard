@@ -281,7 +281,10 @@ class Model:
         return out
 
     def _host(self, ip, name):
-        self.hosts[ip] = printable(name)[:80]; self.hosts.move_to_end(ip)
+        name = printable(name)
+        if len(name) > 80:                       # 긴 이름은 뒷부분(도메인)을 남겨야 용도 표와 맞는다
+            name = "…" + name[-79:]
+        self.hosts[ip] = name; self.hosts.move_to_end(ip)
         if len(self.hosts) > 2000:
             self.hosts.popitem(last=False)
 
