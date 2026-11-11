@@ -3,7 +3,15 @@
 규칙: 호스트가 표의 이름과 같거나 그 하위 도메인이면 맞음. 여러 개가 맞으면 가장 긴(구체적인) 것.
 표에 없으면 None (화면은 용도를 생략). 새 서비스는 아래 표에 한 줄 추가.
 확인되지 않고 기록으로 짐작만 한 것은 설명을 "추정: " 으로 시작한다 (확인된 설명과 섞이지 않게).
+
+내 기기·내 서비스처럼 공개 저장소에 둘 수 없는 것(IP·사설 도메인)은 그 호스트에만 있는 로컬 표에 적는다:
+  /etc/exitguard/purpose-local.json  {"203.0.113.10": "아파트 주차 앱", "nas.example.lan": "집 NAS"}
+키는 IP(정확히 같을 때) 또는 도메인(같거나 하위 도메인). 로컬 표가 먼저다. 파일이 없거나 깨졌으면 무시.
 """
+import json, os, time
+
+LOCAL_PATH = os.environ.get("EXITGUARD_PURPOSE_LOCAL", "/etc/exitguard/purpose-local.json")
+_local = {"checked": 0.0, "mtime": None, "table": {}}
 
 PURPOSE = {
     # 증권·금융
@@ -110,19 +118,55 @@ PURPOSE = {
 }
 
 
-def purpose(host):
-    """'speeddials.opera.com' → 'Opera 새 탭 바로가기 타일'. 'x.com [tls]' 처럼 꼬리표가 붙어 있어도 된다."""
-    if not host:
-        return None
-    h = str(host).split(" [", 1)[0].strip().lower().rstrip(".")
-    if h and "." not in h and not h.isdigit():
-        return "내부 기기 이름 조회"                      # 'godam' 처럼 점 없는 이름 (MagicDNS·공유기)
+def local_table():
+    """로컬 표를 1분마다 확인해 바뀌면 다시 읽는다. 키는 소문자, 값은 30자까지의 문자열만."""
+    now = time.time()
+    if now - _local["checked"] < 60:
+        return _local["table"]
+    _local["checked"] = now
+    try:
+        mtime = os.stat(LOCAL_PATH).st_mtime
+    except OSError:
+        _local["mtime"], _local["table"] = None, {}
+        return _local["table"]
+    if mtime != _local["mtime"]:
+        _local["mtime"] = mtime
+        try:
+            with open(LOCAL_PATH, encoding="utf-8") as f:
+                raw = json.load(f)
+            _local["table"] = {str(k).strip().lower().rstrip("."): v.strip()[:30]
+                               for k, v in raw.items() if isinstance(v, str) and v.strip()}
+        except (OSError, ValueError, AttributeError):
+            _local["table"] = {}
+    return _local["table"]
+
+
+def _lookup(table, h):
     parts = h.split(".")
     for i in range(len(parts) - 1):                      # 가장 긴 이름부터 → 가장 구체적인 설명
-        hit = PURPOSE.get(".".join(parts[i:]))
+        hit = table.get(".".join(parts[i:]))
         if hit:
             return hit
     return None
+
+
+def purpose(host, ip=None):
+    """'speeddials.opera.com' → 'Opera 새 탭 바로가기 타일'. 'x.com [tls]' 처럼 꼬리표가 붙어 있어도 된다.
+    ip 를 주면 로컬 표에서 그 IP 도 찾는다 (이름 없이 IP 로만 접속한 경우)."""
+    local = local_table()
+    if ip and str(ip).lower() in local:
+        return local[str(ip).lower()]
+    if not host:
+        return None
+    h = str(host).split(" [", 1)[0].strip().lower().rstrip(".")
+    if h in local:
+        return local[h]                                  # IP 를 이름처럼 넘긴 경우도 여기서
+    hit = _lookup(local, h) if "." in h else None
+    if hit:
+        return hit
+    if h and "." not in h and not h.isdigit():
+        return "내부 기기 이름 조회"                      # 'godam' 처럼 점 없는 이름 (MagicDNS·공유기)
+    return _lookup(PURPOSE, h)
 
 
 def base_domain(h):

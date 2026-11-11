@@ -16,7 +16,8 @@ concurrency:
 jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
-    runs-on: ${{ matrix.os }}
+    # ubuntu-latest(26.04)에는 Python 3.9 가 없다. 필수 검사 이름은 그대로 두고 3.9 만 24.04 에서 돌린다
+    runs-on: ${{ matrix.python == '3.9' && matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
