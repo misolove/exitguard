@@ -1,5 +1,5 @@
 """purpose.py: 목적지 이름 → 짧은 용도 설명 (고정 표, 가장 구체적인 것 우선)."""
-import importlib.util, os, unittest
+import importlib.util, json, os, tempfile, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("purpose", os.path.join(ROOT, "exitguard", "purpose.py"))
@@ -48,6 +48,45 @@ class PurposeTest(unittest.TestCase):
                  '{"event_type":"http","http":{"hostname":"203.0.113.9"}}',
                  '{"event_type":"tls","tls":{"sni":"x.shop.co.kr"}}', 'not json "sni"']
         self.assertEqual(dict(p.unknown(lines)), {"mystery.example": 2, "shop.co.kr": 1})
+
+
+class LocalTableTest(unittest.TestCase):
+    """공개 저장소에 둘 수 없는 내 기기·서비스(IP·사설 도메인)는 그 호스트의 로컬 표로."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "purpose-local.json")
+        self.old = p.LOCAL_PATH
+        p.LOCAL_PATH = self.path
+        p._local.update(checked=0.0, mtime=None, table={})
+
+    def tearDown(self):
+        p.LOCAL_PATH = self.old
+        p._local.update(checked=0.0, mtime=None, table={})
+        self.dir.cleanup()
+
+    def write(self, obj):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False))
+        p._local["checked"] = 0.0
+
+    def test_ip_and_domain(self):
+        self.write({"203.0.113.10": "아파트 주차 앱 (평문 로그인)", "Home.Example.LAN": "집 NAS", "example.com": "덮어쓴 설명"})
+        self.assertEqual(p.purpose(None, ip="203.0.113.10"), "아파트 주차 앱 (평문 로그인)")
+        self.assertEqual(p.purpose("203.0.113.10"), "아파트 주차 앱 (평문 로그인)")       # 이름 칸에 IP 만 있을 때
+        self.assertEqual(p.purpose("nas.home.example.lan [tls]"), "집 NAS")
+        self.assertEqual(p.purpose("www.example.com"), "덮어쓴 설명")                      # 로컬 표가 먼저
+        self.assertEqual(p.purpose("api.anthropic.com", ip="198.51.100.9"), "Claude (Anthropic)")
+        self.assertIsNone(p.purpose(None, ip="198.51.100.9"))
+
+    def test_missing_or_broken_is_ignored(self):
+        self.assertIsNone(p.purpose(None, ip="203.0.113.10"))                           # 파일 없음
+        self.write("{ 깨진 json")
+        self.assertIsNone(p.purpose(None, ip="203.0.113.10"))
+        self.write({"203.0.113.10": 5, "203.0.113.11": "  ", "203.0.113.12": "가" * 50})
+        self.assertIsNone(p.purpose(None, ip="203.0.113.10"))                           # 문자열만
+        self.assertIsNone(p.purpose(None, ip="203.0.113.11"))
+        self.assertEqual(len(p.purpose(None, ip="203.0.113.12")), 30)
+        self.assertEqual(p.purpose("godam"), "내부 기기 이름 조회")                     # 기본 규칙은 그대로
 
 
 if __name__ == "__main__":

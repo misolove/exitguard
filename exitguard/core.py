@@ -564,7 +564,7 @@ def alert_groups(m, since, n=20, per=8):
     for g in out:
         g["explain"] = explain(g["kind"], g["title"])
         g["dests"] = [{"ip": ip, "count": c, "country": m.country_of(ip), "host": m.hosts.get(ip) or None,
-                       "purpose": purpose.purpose(m.hosts.get(ip))}
+                       "purpose": purpose.purpose(m.hosts.get(ip), ip=ip)}
                       for ip, c in g.pop("_dests").most_common(5)]
         ev = sorted(g.pop("_events"), key=lambda a: a["ts"], reverse=True)[:per]
         g["events"] = [{"ts": a["ts"], "client_name": m.name(a.get("client") or "-"), "dest": a.get("dest"),
@@ -649,7 +649,7 @@ def snapshot(m):
         ts, c = seen.get(p["ip"], (None, None))
         if c is None and alert and alert.get("client"):       # 흐름 기록이 없으면(차단된 곳 등) 마지막 알림의 기기
             ts, c = latest[p["ip"]][0], alert["client"]
-        p["purpose"] = purpose.purpose(p.get("host"))
+        p["purpose"] = purpose.purpose(p.get("host"), ip=p.get("ip"))
         p["last_client"] = ({"name": m.name(c), "ts": datetime.fromtimestamp(ts).isoformat(timespec="seconds"),
                              "ago": ago(ts)} if c else None)
     return {

@@ -238,6 +238,19 @@ echo '{"home": {"lat": 37.57, "lon": 126.98, "city": "Seoul"}}' | sudo tee /etc/
 - 갱신(`exitguard-geoip.service`)은 `/var/lib/exitguard` 에만 쓸 수 있게 제한된다. 다운로드·압축·행 수 검증에 실패하면 기존 파일을 유지한다
 - 트래픽 상위 60개 목적지 + 차단 목적지만 점으로 그린다
 
+### 목적지 용도 설명 (내 것은 로컬 표로)
+
+화면의 "용도: …" 는 `exitguard/purpose.py` 의 고정 표(공개 서비스 이름)에서 온다. 집 기기·아파트 앱 서버처럼
+**공개 저장소에 올릴 수 없는 IP·사설 도메인**은 그 서버에만 있는 로컬 표에 적는다. 로컬 표가 먼저 쓰인다.
+
+```bash
+# 키: IP(정확히 같을 때) 또는 도메인(하위 도메인 포함). 값: 30자 이내 설명. 비밀값이 아니므로 0644
+echo '{"203.0.113.10": "아파트 주차 앱 (평문 로그인)", "nas.example.lan": "집 NAS"}' | sudo tee /etc/exitguard/purpose-local.json
+```
+
+- 1분 안에 다시 읽는다 (재시작 불필요). 파일이 없거나 깨졌으면 무시한다
+- 설명이 없는 도메인 후보: `exitguardctl purpose-unknown`
+
 ### 상시 서비스 (`exitguard-web.service`)
 
 exit node 에서 웹 대시보드를 계속 띄워 두려면 `systemd/exitguard-web.service` 를 쓴다 (install.sh 는 켜지 않음, 선택).
