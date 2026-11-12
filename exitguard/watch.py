@@ -162,7 +162,21 @@ class Watcher:
                 self.derp = derp_ips(out) or self.derp
             except (OSError, subprocess.SubprocessError):
                 pass
+            self.save_derp()
         return self.derp
+
+    def save_derp(self):
+        """대시보드가 중계 서버 IP 에 용도를 붙이도록 목록을 상태 폴더에 쓴다 (purpose.derp_table 이 읽음)."""
+        if not self.derp:
+            return
+        path = os.path.join(self.state_dir, "derp-ips.json")
+        try:
+            with open(path + ".tmp", "w") as f:
+                json.dump(sorted(self.derp), f)
+            os.chmod(path + ".tmp", 0o644)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
 
     def note_high(self, client, title):
         """HIGH 알림 누적 → 임계치 초과 시 격리."""
