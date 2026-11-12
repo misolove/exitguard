@@ -7,11 +7,17 @@
 내 기기·내 서비스처럼 공개 저장소에 둘 수 없는 것(IP·사설 도메인)은 그 호스트에만 있는 로컬 표에 적는다:
   /etc/exitguard/purpose-local.json  {"203.0.113.10": "아파트 주차 앱", "nas.example.lan": "집 NAS"}
 키는 IP(정확히 같을 때) 또는 도메인(같거나 하위 도메인). 로컬 표가 먼저다. 파일이 없거나 깨졌으면 무시.
+
+Tailscale 중계 서버(DERP)는 이름 없이 IP 로만 접속한다. exitguard-watch 가 `tailscale debug derp-map` 으로
+6시간마다 받은 IP 목록을 /var/lib/exitguard/derp-ips.json 에 써 두고, 여기서 그 IP 에 용도를 붙인다.
 """
 import json, os, time
 
 LOCAL_PATH = os.environ.get("EXITGUARD_PURPOSE_LOCAL", "/etc/exitguard/purpose-local.json")
 _local = {"checked": 0.0, "mtime": None, "table": {}}
+DERP_PATH = os.environ.get("EXITGUARD_DERP_IPS", "/var/lib/exitguard/derp-ips.json")
+DERP_LABEL = "Tailscale 중계 서버 (DERP)"
+_derp = {"checked": 0.0, "mtime": None, "table": set()}
 
 PURPOSE = {
     # 증권·금융
@@ -118,27 +124,38 @@ PURPOSE = {
 }
 
 
-def local_table():
-    """로컬 표를 1분마다 확인해 바뀌면 다시 읽는다. 키는 소문자, 값은 30자까지의 문자열만."""
+def _cached(cache, path, parse, empty):
+    """JSON 파일을 1분마다 mtime 으로 확인해 바뀌었을 때만 다시 읽는다. 없거나 깨졌으면 empty()."""
     now = time.time()
-    if now - _local["checked"] < 60:
-        return _local["table"]
-    _local["checked"] = now
+    if now - cache["checked"] < 60:
+        return cache["table"]
+    cache["checked"] = now
     try:
-        mtime = os.stat(LOCAL_PATH).st_mtime
+        mtime = os.stat(path).st_mtime
     except OSError:
-        _local["mtime"], _local["table"] = None, {}
-        return _local["table"]
-    if mtime != _local["mtime"]:
-        _local["mtime"] = mtime
+        cache["mtime"], cache["table"] = None, empty()
+        return cache["table"]
+    if mtime != cache["mtime"]:
+        cache["mtime"] = mtime
         try:
-            with open(LOCAL_PATH, encoding="utf-8") as f:
-                raw = json.load(f)
-            _local["table"] = {str(k).strip().lower().rstrip("."): v.strip()[:30]
-                               for k, v in raw.items() if isinstance(v, str) and v.strip()}
-        except (OSError, ValueError, AttributeError):
-            _local["table"] = {}
-    return _local["table"]
+            with open(path, encoding="utf-8") as f:
+                cache["table"] = parse(json.load(f))
+        except (OSError, ValueError, AttributeError, TypeError):
+            cache["table"] = empty()
+    return cache["table"]
+
+
+def local_table():
+    """로컬 표. 키는 소문자, 값은 30자까지의 문자열만."""
+    return _cached(_local, LOCAL_PATH, lambda raw: {
+        str(k).strip().lower().rstrip("."): v.strip()[:30]
+        for k, v in raw.items() if isinstance(v, str) and v.strip()}, dict)
+
+
+def derp_table():
+    """Tailscale 중계 서버 IP 집합 (watch 가 써 둔 목록)."""
+    return _cached(_derp, DERP_PATH, lambda raw: {x.lower() for x in raw if isinstance(x, str)}
+                   if isinstance(raw, list) else set(), set)
 
 
 def _lookup(table, h):
@@ -156,11 +173,15 @@ def purpose(host, ip=None):
     local = local_table()
     if ip and str(ip).lower() in local:
         return local[str(ip).lower()]
+    if ip and str(ip).lower() in derp_table():
+        return DERP_LABEL
     if not host:
         return None
     h = str(host).split(" [", 1)[0].strip().lower().rstrip(".")
     if h in local:
         return local[h]                                  # IP 를 이름처럼 넘긴 경우도 여기서
+    if h in derp_table():
+        return DERP_LABEL
     hit = _lookup(local, h) if "." in h else None
     if hit:
         return hit

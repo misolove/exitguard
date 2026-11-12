@@ -89,5 +89,39 @@ class LocalTableTest(unittest.TestCase):
         self.assertEqual(p.purpose("godam"), "내부 기기 이름 조회")                     # 기본 규칙은 그대로
 
 
+class DerpTableTest(unittest.TestCase):
+    """Tailscale 중계 서버는 IP 로만 접속한다 → watch 가 써 둔 목록으로 용도를 붙인다."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "derp-ips.json")
+        self.old = p.DERP_PATH
+        p.DERP_PATH = self.path
+        p._derp.update(checked=0.0, mtime=None, table=set())
+
+    def tearDown(self):
+        p.DERP_PATH = self.old
+        p._derp.update(checked=0.0, mtime=None, table=set())
+        self.dir.cleanup()
+
+    def write(self, text):
+        with open(self.path, "w") as f:
+            f.write(text)
+        p._derp["checked"] = 0.0
+
+    def test_derp_ip(self):
+        self.write(json.dumps(["198.51.100.7", "2001:DB8::7"]))
+        self.assertEqual(p.purpose(None, ip="198.51.100.7"), p.DERP_LABEL)
+        self.assertEqual(p.purpose("198.51.100.7"), p.DERP_LABEL)                      # 이름 칸에 IP 만
+        self.assertEqual(p.purpose(None, ip="2001:db8::7"), p.DERP_LABEL)
+        self.assertIsNone(p.purpose(None, ip="192.0.2.50"))
+
+    def test_missing_or_broken_is_ignored(self):
+        self.assertIsNone(p.purpose(None, ip="198.51.100.7"))
+        self.write("{ 깨진")
+        self.assertIsNone(p.purpose(None, ip="198.51.100.7"))
+        self.write(json.dumps({"198.51.100.7": 1}))                                    # 목록이 아니면 무시
+        self.assertIsNone(p.purpose(None, ip="198.51.100.7"))
+
+
 if __name__ == "__main__":
     unittest.main()

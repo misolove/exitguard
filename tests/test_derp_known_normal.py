@@ -32,6 +32,20 @@ class DerpTest(unittest.TestCase):
         self.assertFalse(w.is_derp_check(ev("198.51.100.7", "/generate_204"), set()))    # 목록 없으면 거르지 않음
         self.assertFalse(w.is_derp_check({"dest_ip": "198.51.100.7"}, derp))
 
+    def test_save_for_dashboard(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            wt = w.Watcher.__new__(w.Watcher)                                          # 설정 없이 저장만 시험
+            wt.state_dir, wt.derp = d, set()
+            wt.save_derp()
+            self.assertFalse(os.path.exists(os.path.join(d, "derp-ips.json")))       # 빈 목록은 쓰지 않음
+            wt.derp = w.derp_ips(DERP_MAP)
+            wt.save_derp()
+            path = os.path.join(d, "derp-ips.json")
+            with open(path) as f:
+                self.assertEqual(json.load(f), ["198.51.100.7", "2001:db8::7", "203.0.113.9"])
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)                  # 웹(비 root)이 읽음
+
 
 if __name__ == "__main__":
     unittest.main()
