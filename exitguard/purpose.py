@@ -10,8 +10,12 @@
 
 Tailscale 중계 서버(DERP)는 이름 없이 IP 로만 접속한다. exitguard-watch 가 `tailscale debug derp-map` 으로
 6시간마다 받은 IP 목록을 /var/lib/exitguard/derp-ips.json 에 써 두고, 여기서 그 IP 에 용도를 붙인다.
+
+이름 없이 IP 로만 접속했고 위 표에도 없으면, 회사가 공개한 주소 대역(RANGES)으로 용도를 붙인다.
+GeoIP 국가가 실제 서버 위치와 다른 대역(예: Meta 57.144.0.0/14 가 브라질로 표시)도 이걸로 알아볼 수 있다.
+이름이 있으면 이름 표가 먼저다 (더 구체적이다).
 """
-import json, os, time
+import ipaddress, json, os, time
 
 LOCAL_PATH = os.environ.get("EXITGUARD_PURPOSE_LOCAL", "/etc/exitguard/purpose-local.json")
 _local = {"checked": 0.0, "mtime": None, "table": {}}
@@ -124,6 +128,25 @@ PURPOSE = {
 }
 
 
+# 회사가 자기 AS 로 공개한 주소 대역 → 용도. 대역이 바뀌면 여기 한 줄 고친다.
+RANGES = [(ipaddress.ip_network(n), label) for label, nets in {
+    "Meta (페이스북·인스타·왓츠앱)": (               # AS32934
+        "31.13.24.0/21", "31.13.64.0/18", "57.144.0.0/14", "66.220.144.0/20", "69.63.176.0/20",
+        "69.171.224.0/19", "102.132.96.0/20", "129.134.0.0/16", "157.240.0.0/16", "163.70.128.0/17",
+        "173.252.64.0/18", "179.60.192.0/22", "185.60.216.0/22", "204.15.20.0/22",
+        "2a03:2880::/32", "2620:0:1c00::/40"),
+}.items() for n in nets]
+
+
+def range_label(ip):
+    """IP 가 RANGES 의 대역 안이면 그 용도, 아니면 None. IP 가 아니면 None."""
+    try:
+        a = ipaddress.ip_address(str(ip).strip().strip("[]"))
+    except ValueError:
+        return None
+    return next((label for net, label in RANGES if a.version == net.version and a in net), None)
+
+
 def _cached(cache, path, parse, empty):
     """JSON 파일을 1분마다 mtime 으로 확인해 바뀌었을 때만 다시 읽는다. 없거나 깨졌으면 empty()."""
     now = time.time()
@@ -176,7 +199,7 @@ def purpose(host, ip=None):
     if ip and str(ip).lower() in derp_table():
         return DERP_LABEL
     if not host:
-        return None
+        return range_label(ip) if ip else None
     h = str(host).split(" [", 1)[0].strip().lower().rstrip(".")
     if h in local:
         return local[h]                                  # IP 를 이름처럼 넘긴 경우도 여기서
@@ -187,7 +210,7 @@ def purpose(host, ip=None):
         return hit
     if h and "." not in h and not h.isdigit():
         return "내부 기기 이름 조회"                      # 'godam' 처럼 점 없는 이름 (MagicDNS·공유기)
-    return _lookup(PURPOSE, h)
+    return _lookup(PURPOSE, h) or range_label(ip or h)
 
 
 def base_domain(h):

@@ -251,6 +251,8 @@ echo '{"203.0.113.10": "아파트 주차 앱 (평문 로그인)", "nas.example.l
 - 1분 안에 다시 읽는다 (재시작 불필요). 파일이 없거나 깨졌으면 무시한다
 - Tailscale 중계 서버(DERP)는 이름 없이 IP 로 접속해 지구본에 낯선 나라로 뜬다. `exitguard-watch` 가
   `tailscale debug derp-map` 목록을 `/var/lib/exitguard/derp-ips.json` 에 써 두면 그 IP 에 "Tailscale 중계 서버 (DERP)" 가 붙는다 (손으로 넣을 것 없음)
+- 이름 없이 IP 로만 접속했고 표에도 없으면 회사가 공개한 주소 대역(`purpose.py` 의 `RANGES`)으로 용도를 붙인다.
+  예: Meta 57.144.0.0/14 는 GeoIP 로 브라질에 찍히지만 "Meta (페이스북·인스타·왓츠앱)" 로 보인다. 이름이 있으면 이름 표가 먼저
 - 설명이 없는 도메인 후보: `exitguardctl purpose-unknown`
 
 ### 상시 서비스 (`exitguard-web.service`)
