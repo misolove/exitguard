@@ -89,6 +89,24 @@ class LocalTableTest(unittest.TestCase):
         self.assertEqual(p.purpose("godam"), "내부 기기 이름 조회")                     # 기본 규칙은 그대로
 
 
+
+class RangeLabelTest(unittest.TestCase):
+    META = "Meta (페이스북·인스타·왓츠앱)"
+
+    def test_ip_only_in_range(self):
+        self.assertEqual(p.purpose(None, ip="57.145.0.1"), self.META)       # GeoIP 로는 브라질
+        self.assertEqual(p.purpose("157.240.1.1"), self.META)                # IP 를 이름처럼 넘긴 경우
+        self.assertEqual(p.purpose(None, ip="2a03:2880:f000::1"), self.META)
+
+    def test_name_wins_over_range(self):
+        self.assertEqual(p.purpose("scontent.cdninstagram.com", ip="57.145.0.1"), "Instagram 이미지·영상")
+
+    def test_outside_and_garbage(self):
+        self.assertIsNone(p.purpose(None, ip="203.0.113.10"))
+        self.assertIsNone(p.purpose(None, ip="57.148.0.1"))                  # /14 바로 다음
+        self.assertIsNone(p.range_label("not-an-ip"))
+        self.assertIsNone(p.purpose("example.org", ip="198.51.100.7"))
+
 class DerpTableTest(unittest.TestCase):
     """Tailscale 중계 서버는 IP 로만 접속한다 → watch 가 써 둔 목록으로 용도를 붙인다."""
     def setUp(self):
