@@ -98,6 +98,10 @@ class RangeLabelTest(unittest.TestCase):
         self.assertEqual(p.purpose("157.240.1.1"), self.META)                # IP 를 이름처럼 넘긴 경우
         self.assertEqual(p.purpose(None, ip="2a03:2880:f000::1"), self.META)
 
+    def test_google_apac_ipv6(self):
+        self.assertEqual(p.purpose(None, ip="2404:6800:4004:81c::200e"), "Google (아시아 IPv6)")
+        self.assertIsNone(p.purpose(None, ip="2404:6801::1"))
+
     def test_name_wins_over_range(self):
         self.assertEqual(p.purpose("scontent.cdninstagram.com", ip="57.145.0.1"), "Instagram 이미지·영상")
 
